@@ -13,6 +13,7 @@ type Peer struct {
 	listenport int
 	id string
 	encoders map[string]*json.Encoder
+	output chan string
 	lock sync.Mutex
 }
 
@@ -53,12 +54,13 @@ func (p *Peer) prepareMarshalling(conn net.Conn) {
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 	// Send a message to notify connection of the name of this.
-	p.lock.Lock()
+	p.lock.Lock() // Lock to ensure no messages get sent to this before it has had a chance to update decoders map.
 	encoder.Encode(Message{Type: helpers.CONNECT_MESSAGE_TYPE, From: p.id})
 	// Wait for reply to establish their name.
 	var msg Message
 	decoder.Decode(&msg)
 	p.encoders[msg.From] = encoder
+	fmt.Println(p.encoders, p.id)
 	p.lock.Unlock()
 	go p.handleDecode(decoder)
 }
@@ -77,6 +79,7 @@ func (p *Peer) handleDecode(decoder *json.Decoder) {
 }
 
 func (p *Peer) OnMessage(from string, msg *Message) {
+	fmt.Println("on", msg)
 	switch msg.Type {
 	case helpers.PING_MESSAGE_TYPE:
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, From: p.id})
@@ -89,7 +92,7 @@ func (p* Peer) Connect(addr string, port int) error {
 		return err
 	}
 	p.prepareMarshalling(conn)
-	return err
+	return nil
 }
 
 func (p *Peer) Send(to string, msg *Message) error {
@@ -98,7 +101,6 @@ func (p *Peer) Send(to string, msg *Message) error {
 	if encoder == nil {
 		return fmt.Errorf("Encoder not found for receiver %s!", to)
 	}
-	fmt.Println("HEL", msg)
 	// Send the message.
 	encoder.Encode(msg)
 	return nil

@@ -1,11 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"peer/helpers"
-	"sync"
 	"testing"
-	"time"
 )
 
 func TestNewPeer(t *testing.T) {
@@ -38,16 +37,19 @@ func TestPeerStart(t *testing.T) {
 }
 
 func TestPeerConnect(t *testing.T) {
-	peer1 := NewPeer(42001)
+	peer1 := NewPeer(42003)
 	peer1.Start()
 
-	peer2 := NewPeer(42002)
+	peer2 := NewPeer(42004)
 	peer2.Start()
 
-	var wg sync.WaitGroup
-	wg.Go(func() {peer1.Connect("", peer2.listenport)})
-	wg.Wait()
-	peer1.Send("42002", &Message{From: "42001", Type: helpers.PING_MESSAGE_TYPE})
-	time.Sleep(1 * time.Second) // TODO: Remove this line. We need some way to wait until pong-message is received.
-	// TODO: We need something to test here.
+	peer1.Connect("", peer2.listenport)
+	_, has_key_42002 := peer1.encoders[peer2.id]
+	if !has_key_42002 {
+		t.Errorf("Expected key %s, but found %s.", peer2.id, fmt.Sprint(peer1.encoders))
+	}
+	_, has_key_42001 := peer2.encoders[peer1.id]
+	if !has_key_42001 {
+		t.Errorf("Expected key %s, but found %s.", peer1.id, fmt.Sprint(peer2.encoders))
+	}
 }
