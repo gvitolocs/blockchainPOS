@@ -1,5 +1,7 @@
 # DISSY_DA1_1_Hand-Ins
 
+This repository will contain hand-in files for the Distributed Systems and Security course.
+
 
 
 ## Getting started
