@@ -11,10 +11,10 @@ import (
 
 type Peer struct {
 	listenport int
-	id string
-	encoders map[string]*json.Encoder
-	output chan string
-	lock sync.Mutex
+	id         string
+	encoders   map[string]*json.Encoder
+	output     chan string
+	lock       sync.Mutex
 }
 
 func NewPeer(listenport int) *Peer {
@@ -82,12 +82,12 @@ func (p *Peer) OnMessage(from string, msg *Message) {
 	fmt.Println("on", msg)
 	switch msg.Type {
 	case helpers.PING_MESSAGE_TYPE:
-		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, From: p.id})
+		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
 	}
 }
 
-func (p* Peer) Connect(addr string, port int) error {
-	conn, err := net.Dial(helpers.PROTOCOL, addr + ":" + strconv.Itoa(port)) // TODO: Someone should ensure connections are closed.
+func (p *Peer) Connect(addr string, port int) error {
+	conn, err := net.Dial(helpers.PROTOCOL, addr+":"+strconv.Itoa(port)) // TODO: Someone should ensure connections are closed.
 	if err != nil {
 		return err
 	}
