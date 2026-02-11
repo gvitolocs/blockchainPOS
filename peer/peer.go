@@ -22,6 +22,7 @@ func NewPeer(listenport int) *Peer {
 	peer.id = strconv.Itoa(listenport)
 	peer.listenport = listenport
 	peer.encoders = make(map[string]*json.Encoder)
+	peer.output = make(chan string, 100)
 	return peer
 }
 
@@ -60,7 +61,7 @@ func (p *Peer) prepareMarshalling(conn net.Conn) {
 	var msg Message
 	decoder.Decode(&msg)
 	p.encoders[msg.From] = encoder
-	fmt.Println(p.encoders, p.id)
+	// fmt.Println(p.encoders, p.id)
 	p.lock.Unlock()
 	go p.handleDecode(decoder)
 }
@@ -79,10 +80,20 @@ func (p *Peer) handleDecode(decoder *json.Decoder) {
 }
 
 func (p *Peer) OnMessage(from string, msg *Message) {
-	fmt.Println("on", msg)
+	//fmt.Println("on", msg)
 	switch msg.Type {
 	case helpers.PING_MESSAGE_TYPE:
+		logMsg := fmt.Sprintf("Peer %s received Ping (MsgID: %s) from Peer %s", p.id, msg.MsgID, from)
+		p.output <- logMsg
+
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
+
+		sendMsg := fmt.Sprintf("Peer %s sent Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
+		p.output <- sendMsg
+
+	case helpers.PONG_MESSAGE_TYPE:
+		logMsg := fmt.Sprintf("Peer %s received Pong (MsgID: %s) from Peer %s", p.id, msg.MsgID, from)
+		p.output <- logMsg
 	}
 }
 
