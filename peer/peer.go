@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"peer/account"
 	"peer/helpers"
 	"slices"
 	"strconv"
@@ -29,6 +30,8 @@ type Peer struct {
 	// Map of messages this has sent on (key is message ID).
 	msgHistory   map[string]MessageHistory
 	floodingLock sync.Mutex
+	// Ledger and transaction.
+	ledger account.Ledger
 }
 
 type MessageHistory struct {
@@ -153,6 +156,9 @@ func (p *Peer) OnMessage(from string, msg *Message) {
 		p.output <- fmt.Sprintf("Peer %s sending Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
 		return // Do not flood ping messages.
+	case helpers.TRANSACTION_MESSAGE_TYPE:
+		// Handle receiving of transaction.
+		p.handleTransaction(msg)
 	}
 	p.addReceivedFloodMessage(msg)
 	p.FloodNetwork(msg)
@@ -282,4 +288,25 @@ func (p *Peer) readMessage(reader *bufio.Reader) (*Message, error) {
 		return nil, err
 	}
 	return &msg, nil
+}
+
+func (p *Peer) FloodTransaction(tx *account.Transaction) {
+	payload, err := json.Marshal(&tx)
+	if err != nil {
+		fmt.Println(err) // For testing. There should not be any way to make errors here in production code.
+	}
+	p.FloodNetwork(&Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload})
+}
+
+func (p *Peer) handleTransaction(msg *Message) {
+	var tx account.Transaction
+	json.Unmarshal(msg.Payload, &tx)
+	// Do nothing, if transaction has already been handled.
+	_, exists := p.msgHistory[msg.MsgID] // WE NEED MUTEX DURING THIS METHOD!
+	if exists {
+		return
+	}
+
+	// If transaction has not been processed, process it.
+	p.ledger.Transaction(&tx)
 }

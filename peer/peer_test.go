@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"peer/account"
 	"peer/helpers"
 	"reflect"
 	"slices"
@@ -152,7 +153,7 @@ func TestFloodMessage(t *testing.T) {
 		t.Fatalf("Expected connection from %s in peer1", peer2.id)
 	}
 
-	peer1.FloodNetwork(&Message{MsgID: "flood-001", From: peer1.id, Type: helpers.TRANSACTION_MESSAGE_TYPE})
+	peer1.FloodNetwork(&Message{MsgID: "flood-001", From: peer1.id, Type: "Test-flood-message"})
 	timeout := time.After(2 * time.Second)
 	// Wait for each peer to receive the flood message twice (one from each other peer).
 	// NB: peer1 should not receive the message at all!
@@ -166,6 +167,29 @@ func TestFloodMessage(t *testing.T) {
 			t.Errorf("Timed out waiting for message")
 		}
 	}
+}
+
+func TestTransaction(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+	fmt.Println(port1, port2, port3)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	peer2.FloodTransaction(&account.Transaction{ID: "t-01", From: "User-01", To: "User-02", Amount: 42})
+
+	// Do some testing...
 }
 
 func getFreePort(t *testing.T) int {
