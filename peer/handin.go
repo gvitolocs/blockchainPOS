@@ -1,4 +1,4 @@
-// handin.go — Demo for Exercise 4.6 (Hand-in 1): simple P2P ledger.
+// handin.go — Demo for Exercise 4.6 (Hand-in 2): simple P2P ledger.
 package main
 
 import (

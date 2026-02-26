@@ -1,6 +1,6 @@
-# Hand-in 1 – Exercise 4.6 (Peer-to-Peer Flooding and a Simple Ledger)
+# Hand-in 2 – Exercise 4.6 (Peer-to-Peer Flooding and a Simple Ledger)
 
-This repository contains the code and report for Hand-in 1 (Exercise 4.6).
+This repository contains the code and report for Hand-in 2 (Exercise 4.6).
 
 ## Run the demo
 
@@ -18,4 +18,4 @@ cd peer
 go test
 ```
 
-See also REPORT.txt for design, how to run, and discussion questions in English.
+See also REPORT.pdf for design, how to run, and discussion questions in English.
