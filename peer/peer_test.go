@@ -57,7 +57,7 @@ func TestPeerConnectAndSendMessages(t *testing.T) {
 	peer2 := NewPeer(port2)
 	peer2.Start()
 
-	if err := peer1.Connect("127.0.0.1", peer2.listenport); err != nil {
+	if _, err := peer1.Connect("127.0.0.1", peer2.listenport); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
 

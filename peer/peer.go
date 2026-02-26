@@ -41,11 +41,12 @@ func NewPeer(listenport int) *Peer {
 
 func (p *Peer) StartWithConnection(addr string, port int) {
 	p.Start()
-	err := p.Connect(addr, port)
+	peers, err := p.Connect(addr, port)
 	if err != nil { // If connection fails, then there is no network.
 		return // Do not propagate error. This peer starts its own network, so OK.
 	}
-	// Otherwise, a connection message was sent, and remaining connections can be established prepareConnection.
+	// Otherwise, a connection message was sent, and remaining connections can be established.
+	p.joinNetwork(addr, peers)
 }
 
 // Start listening on the port.
@@ -143,19 +144,19 @@ func (p *Peer) printOutput() {
 }
 
 // Connect to another peer.
-func (p *Peer) Connect(addr string, port int) error {
+func (p *Peer) Connect(addr string, port int) ([]string, error) {
 	conn, err := net.Dial(helpers.PROTOCOL, addr+":"+strconv.Itoa(port))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	peers, err := p.prepareConnection(conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	p.joinNetwork(addr, peers)
-	return nil
+	return peers, nil
 }
 
+// Connect to a list of peers (may be known, in which case, it does notrhing).
 func (p *Peer) joinNetwork(addr string, peers []string) {
 	for _, peer := range peers {
 		_, exists := p.conns[peer]
