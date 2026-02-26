@@ -14,3 +14,6 @@ const PING_MESSAGE_TYPE = "Ping"
 
 // Reply to ping message to acknowledge connection.
 const PONG_MESSAGE_TYPE = "Pong"
+
+// Transaction messages to send Transaction objects.
+const TRANSACTION_MESSAGE_TYPE = "Transaction"

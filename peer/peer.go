@@ -26,6 +26,23 @@ type Peer struct {
 	lock     sync.Mutex
 	// sendLock prevents interleaved writes on a connection.
 	sendLock sync.Mutex
+	// Map of messages this has sent on (key is message ID).
+	msgHistory   map[string]MessageHistory
+	floodingLock sync.Mutex
+}
+
+type MessageHistory struct {
+	content      *Message // The actual message.
+	receivedFrom []string // List of IDs from all peers this peer has received this message from.
+	isSent       bool     // Has this peer already sent this message.
+}
+
+func NewMessageHistory(msg *Message) *MessageHistory {
+	hist := new(MessageHistory)
+	hist.content = msg
+	hist.receivedFrom = make([]string, 0)
+	hist.isSent = false
+	return hist
 }
 
 // Create a new Peer object.
@@ -36,6 +53,7 @@ func NewPeer(listenport int) *Peer {
 	peer.conns = make(map[string]net.Conn)
 	peer.output = make(chan string, 32)
 	peer.received = make(chan Message, 32)
+	peer.msgHistory = make(map[string]MessageHistory)
 	return peer
 }
 
@@ -134,6 +152,46 @@ func (p *Peer) OnMessage(from string, msg *Message) {
 	case helpers.PING_MESSAGE_TYPE:
 		p.output <- fmt.Sprintf("Peer %s sending Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
+		return // Do not flood ping messages.
+	}
+	p.addReceivedFloodMessage(msg)
+	p.FloodNetwork(msg)
+}
+
+// Note this message as beeing received (should be used before calling FloodNetwork on a message).
+func (p *Peer) addReceivedFloodMessage(msg *Message) {
+	p.floodingLock.Lock()
+	defer p.floodingLock.Unlock()
+	var hist MessageHistory
+	hist, exists := p.msgHistory[msg.MsgID]
+
+	if !exists { // If the msg has never been received before, create a new history for it.
+		hist = *NewMessageHistory(msg)
+	}
+	hist.receivedFrom = append(hist.receivedFrom, msg.From)
+	p.msgHistory[msg.MsgID] = hist
+}
+
+// Flood a message across the network.
+func (p *Peer) FloodNetwork(msg *Message) {
+	p.floodingLock.Lock()
+	defer p.floodingLock.Unlock()
+	hist, _ := p.msgHistory[msg.MsgID]
+
+	if hist.isSent { // If it did exist and was already sent, abort.
+		return
+	}
+	// Set the message to be sent.
+	hist.isSent = true
+	p.msgHistory[msg.MsgID] = hist
+	p.output <- fmt.Sprintf("Peer %s flooding %s (MsgID: %s)", p.id, msg.Type, msg.MsgID)
+	// Change the sender, so that others are aware they received this message version from this peer.
+	msg.From = p.id
+	// Send to all peers it did not receive the message from (and also not itself).
+	for peer, conn := range p.conns {
+		if peer != p.id && !slices.Contains(hist.receivedFrom, peer) {
+			p.writeMessage(conn, msg)
+		}
 	}
 }
 

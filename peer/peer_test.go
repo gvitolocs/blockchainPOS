@@ -130,6 +130,40 @@ func TestConnectAndJoinNetwork(t *testing.T) {
 	}
 }
 
+func TestFloodMessage(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+	fmt.Println(port1, port2, port3)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	peer1.FloodNetwork(&Message{MsgID: "flood-001", From: peer1.id, Type: helpers.TRANSACTION_MESSAGE_TYPE})
+	timeout := time.After(2 * time.Second)
+	// Wait for each peer to receive the flood message twice (one from each other peer).
+	// NB: peer1 should not receive the message at all!
+	// NB: It is technically possible that peer3 receives from peer1 and peer2 before sending, but the chances are minimal
+	// when no order is implemented. Thus, this might need to be changed in the future.
+	expected := [4]chan Message{peer2.received, peer2.received, peer3.received, peer3.received}
+	for _, ch := range expected {
+		select {
+		case <-ch:
+		case <-timeout:
+			t.Errorf("Timed out waiting for message")
+		}
+	}
+}
+
 func getFreePort(t *testing.T) int {
 	// Ask the OS for an available port.
 	t.Helper()
