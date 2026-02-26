@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"peer/helpers"
+	"slices"
 	"testing"
 	"time"
 )
@@ -96,6 +98,35 @@ func TestPeerConnectAndSendMessages(t *testing.T) {
 		case <-timeout:
 			t.Fatalf("Timed out waiting for messages, got %d/%d", got, k)
 		}
+	}
+}
+
+func TestConnectAndJoinNetwork(t *testing.T) {
+	// Connect three peers and verify they all connect through flooding.
+	// I.e., only attempt to connect 2->1 and 3->1 and check that they all are connected to three peers.
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	conns := len(peer3.conns)
+	if conns != 3 {
+		t.Fatalf("Not enough connections on peer3, %d", conns)
+	}
+	conns = len(peer2.conns)
+	if conns != 3 {
+		t.Fatalf("Not enough connections on peer2, %d, (%s)", conns, slices.Collect(maps.Keys(peer2.conns)))
 	}
 }
 

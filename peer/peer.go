@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"peer/helpers"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -26,6 +28,7 @@ type Peer struct {
 	sendLock sync.Mutex
 }
 
+// Create a new Peer object.
 func NewPeer(listenport int) *Peer {
 	peer := new(Peer)
 	peer.id = strconv.Itoa(listenport)
@@ -36,12 +39,24 @@ func NewPeer(listenport int) *Peer {
 	return peer
 }
 
+func (p *Peer) StartWithConnection(addr string, port int) {
+	p.Start()
+	err := p.Connect(addr, port)
+	if err != nil { // If connection fails, then there is no network.
+		return // Do not propagate error. This peer starts its own network, so OK.
+	}
+	// Otherwise, a connection message was sent, and remaining connections can be established prepareConnection.
+}
+
+// Start listening on the port.
 func (p *Peer) Start() error {
 	// Listen for connection.
 	listener, err := net.Listen(helpers.PROTOCOL, ":"+strconv.Itoa(p.listenport))
 	if err != nil {
 		return err
 	}
+	// Add self to map of connections.
+	p.conns[p.id] = nil
 	// Goroutine to listen to any number of peers.
 	go p.listenForPeers(listener)
 	// Print logs from a single goroutine to avoid interleaving.
@@ -49,6 +64,7 @@ func (p *Peer) Start() error {
 	return nil
 }
 
+// Listen for peers. When connection is established, prepare communication with them.
 func (p *Peer) listenForPeers(listener net.Listener) {
 	// Defer ensures listener is closed when this goroutine returns.
 	defer listener.Close()
@@ -58,28 +74,36 @@ func (p *Peer) listenForPeers(listener net.Listener) {
 		if err != nil {
 			panic(err)
 		}
-		// Prepare to marshal data for sending over network.
-		p.prepareMarshalling(conn)
+		// Prepare network communication with the new connection.
+		p.prepareConnection(conn)
 	}
 }
 
-func (p *Peer) prepareMarshalling(conn net.Conn) {
+// Prepare communication with a peer.
+func (p *Peer) prepareConnection(conn net.Conn) ([]string, error) {
 	reader := bufio.NewReader(conn)
 	// Handshake: announce our id, then learn the peer id.
 	p.lock.Lock() // Lock to ensure no messages get sent to this before it has had a chance to update decoders map.
-	_ = p.writeMessage(conn, &Message{Type: helpers.CONNECT_MESSAGE_TYPE, From: p.id})
+	defer p.lock.Unlock()
+	// Send a connect message. The other peer will receivee it in their prepareConnection at the readMessage line.
+	// Message payload is the list of known peers, this knows about (self, if this is a new peer, otherwise the entire network).
+	payload, _ := json.Marshal(slices.Collect(maps.Keys(p.conns))) // Convert connection keys to []string and marshal it.
+	_ = p.writeMessage(conn, &Message{Type: helpers.CONNECT_MESSAGE_TYPE, From: p.id, Payload: payload})
 	// Wait for reply to establish their name.
 	msg, err := p.readMessage(reader)
 	if err != nil {
-		p.lock.Unlock()
 		_ = conn.Close()
-		return
+		return nil, err
 	}
 	p.conns[msg.From] = conn
-	p.lock.Unlock()
 	go p.handleDecode(msg.From, conn, reader)
+	// Unmarshal the received list of peers the connection knew about.
+	var peers []string
+	json.Unmarshal(msg.Payload, &peers)
+	return peers, nil
 }
 
+// Wait for messages from connection.
 func (p *Peer) handleDecode(peerID string, conn net.Conn, reader *bufio.Reader) {
 	// Defer ensures cleanup when the reader loop ends.
 	defer func() {
@@ -99,6 +123,7 @@ func (p *Peer) handleDecode(peerID string, conn net.Conn, reader *bufio.Reader) 
 	}
 }
 
+// Handle messages received.
 func (p *Peer) OnMessage(from string, msg *Message) {
 	// Sprintf because output is a channel.
 	p.output <- fmt.Sprintf("Peer %s received %s (MsgID: %s) from Peer %s", p.id, msg.Type, msg.MsgID, from)
@@ -117,15 +142,31 @@ func (p *Peer) printOutput() {
 	}
 }
 
+// Connect to another peer.
 func (p *Peer) Connect(addr string, port int) error {
 	conn, err := net.Dial(helpers.PROTOCOL, addr+":"+strconv.Itoa(port))
 	if err != nil {
 		return err
 	}
-	p.prepareMarshalling(conn)
+	peers, err := p.prepareConnection(conn)
+	if err != nil {
+		return err
+	}
+	p.joinNetwork(addr, peers)
 	return nil
 }
 
+func (p *Peer) joinNetwork(addr string, peers []string) {
+	for _, peer := range peers {
+		_, exists := p.conns[peer]
+		if !exists {
+			port, _ := strconv.Atoi(peer)
+			p.Connect(addr, port)
+		}
+	}
+}
+
+// Send a message to another peer.
 func (p *Peer) Send(to string, msg *Message) error {
 	// Try to find the connection connected to the receiver of this message.
 	p.lock.Lock()
@@ -138,6 +179,7 @@ func (p *Peer) Send(to string, msg *Message) error {
 	return p.writeMessage(conn, msg)
 }
 
+// Marshal message and send it to the connection.
 func (p *Peer) writeMessage(conn net.Conn, msg *Message) error {
 	// Encode JSON to a buffer to compute length prefix.
 	var buf bytes.Buffer
@@ -146,7 +188,7 @@ func (p *Peer) writeMessage(conn net.Conn, msg *Message) error {
 		return err
 	}
 	data := buf.Bytes()
-	header := make([]byte, 4)
+	header := make([]byte, helpers.MESSAGE_HEADER_SIZE)
 	binary.BigEndian.PutUint32(header, uint32(len(data)))
 	// Write header + payload atomically per connection.
 	p.sendLock.Lock()
@@ -160,9 +202,10 @@ func (p *Peer) writeMessage(conn net.Conn, msg *Message) error {
 	return nil
 }
 
+// Unmarshal message received from a connection.
 func (p *Peer) readMessage(reader *bufio.Reader) (*Message, error) {
 	// Read length prefix, then exact JSON payload.
-	var header [4]byte
+	var header [helpers.MESSAGE_HEADER_SIZE]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return nil, err
 	}
