@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net"
 	"peer/helpers"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -120,13 +121,16 @@ func TestConnectAndJoinNetwork(t *testing.T) {
 		t.Fatalf("Expected connection from %s in peer1", peer2.id)
 	}
 
-	conns := len(peer3.conns)
-	if conns != 3 {
-		t.Fatalf("Not enough connections on peer3, %d", conns)
-	}
-	conns = len(peer2.conns)
-	if conns != 3 {
-		t.Fatalf("Not enough connections on peer2, %d, (%s)", conns, slices.Collect(maps.Keys(peer2.conns)))
+	conns1 := slices.Collect(maps.Keys(peer1.conns))
+	slices.Sort(conns1)
+	conns2 := slices.Collect(maps.Keys(peer2.conns))
+	slices.Sort(conns2)
+	conns3 := slices.Collect(maps.Keys(peer2.conns))
+	slices.Sort(conns3)
+	expected := []string{peer1.id, peer2.id, peer3.id}
+	slices.Sort(expected)
+	if !(reflect.DeepEqual(conns1, conns2) && reflect.DeepEqual(conns1, conns3) && reflect.DeepEqual(conns1, expected[:])) {
+		t.Fatalf("Peer sets not equal")
 	}
 }
 
