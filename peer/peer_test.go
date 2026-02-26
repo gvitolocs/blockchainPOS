@@ -192,6 +192,112 @@ func TestTransaction(t *testing.T) {
 	// Do some testing...
 }
 
+// TestLedgerConvergence checks that after flooding transactions, all peers end up with the same ledger.
+func TestLedgerConvergence(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) {
+		t.Fatalf("Peers did not connect")
+	}
+
+	// Each peer sends 2 transactions; total 6, all use accounts A,B.
+	peer1.FloodTransaction(&account.Transaction{ID: "lc-1", From: "A", To: "B", Amount: 10})
+	peer2.FloodTransaction(&account.Transaction{ID: "lc-2", From: "B", To: "A", Amount: 3})
+	peer3.FloodTransaction(&account.Transaction{ID: "lc-3", From: "A", To: "B", Amount: 1})
+	peer1.FloodTransaction(&account.Transaction{ID: "lc-4", From: "B", To: "A", Amount: 2})
+	peer2.FloodTransaction(&account.Transaction{ID: "lc-5", From: "A", To: "B", Amount: 5})
+	peer3.FloodTransaction(&account.Transaction{ID: "lc-6", From: "B", To: "A", Amount: 1})
+
+	totalTx := 6
+	done := make(chan struct{})
+	for _, p := range []*Peer{peer1, peer2, peer3} {
+		p := p
+		go func() {
+			count := 0
+			for count < totalTx {
+				msg := <-p.received
+				if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE {
+					count++
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Timeout waiting for transactions")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	ref := peer1.ledger.CopyAccounts()
+	for i, p := range []*Peer{peer2, peer3} {
+		other := p.ledger.CopyAccounts()
+		if !maps.Equal(ref, other) {
+			t.Errorf("Ledger mismatch peer%d: got %v, want same as peer1 %v", i+2, other, ref)
+		}
+	}
+}
+
+// TestTransactionDeliveryCount checks that when one peer floods N transactions, the other peer receives all N (distinct MsgIDs).
+func TestTransactionDeliveryCount(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+	if !waitForConn(peer1, peer2.id, 2*time.Second) {
+		t.Fatalf("Peers did not connect")
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	numTx := 4
+	wantIDs := make(map[string]bool)
+	for i := 0; i < numTx; i++ {
+		wantIDs[fmt.Sprintf("tdc-%d", i)] = true
+	}
+
+	done := make(chan struct{})
+	go func() {
+		seen := make(map[string]bool)
+		for len(seen) < numTx {
+			msg := <-peer1.received
+			if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE && wantIDs[msg.MsgID] {
+				seen[msg.MsgID] = true
+			}
+		}
+		done <- struct{}{}
+	}()
+
+	for i := 0; i < numTx; i++ {
+		peer2.FloodTransaction(&account.Transaction{
+			ID:     fmt.Sprintf("tdc-%d", i),
+			From:   "X",
+			To:     "Y",
+			Amount: 1,
+		})
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout: peer1 did not receive all transactions from peer2")
+	}
+}
+
 func getFreePort(t *testing.T) int {
 	// Ask the OS for an available port.
 	t.Helper()

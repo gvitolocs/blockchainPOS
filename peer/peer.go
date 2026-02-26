@@ -57,6 +57,8 @@ func NewPeer(listenport int) *Peer {
 	peer.output = make(chan string, 32)
 	peer.received = make(chan Message, 32)
 	peer.msgHistory = make(map[string]MessageHistory)
+	// Ledger must be initialized or Transaction() would panic on nil map.
+	peer.ledger = *account.MakeLedger()
 	return peer
 }
 
@@ -68,6 +70,8 @@ func (p *Peer) StartWithConnection(addr string, port int) {
 	}
 	// Otherwise, a connection message was sent, and remaining connections can be established.
 	p.joinNetwork(addr, peers)
+	// Tell the whole network we joined (so peers that don't have us yet can add us).
+	p.floodJoin()
 }
 
 // Start listening on the port.
@@ -96,13 +100,13 @@ func (p *Peer) listenForPeers(listener net.Listener) {
 		if err != nil {
 			panic(err)
 		}
-		// Prepare network communication with the new connection.
-		p.prepareConnection(conn)
+		// Prepare network communication with the new connection. We are the server (acceptor).
+		p.prepareConnection(conn, true)
 	}
 }
 
-// Prepare communication with a peer.
-func (p *Peer) prepareConnection(conn net.Conn) ([]string, error) {
+// Prepare communication with a peer. fromAccept is true when we accepted the connection (we are "server").
+func (p *Peer) prepareConnection(conn net.Conn, fromAccept bool) ([]string, error) {
 	reader := bufio.NewReader(conn)
 	// Handshake: announce our id, then learn the peer id.
 	p.lock.Lock() // Lock to ensure no messages get sent to this before it has had a chance to update decoders map.
@@ -119,6 +123,11 @@ func (p *Peer) prepareConnection(conn net.Conn) ([]string, error) {
 	}
 	p.conns[msg.From] = conn
 	go p.handleDecode(msg.From, conn, reader)
+	// Catch-up: when we are the server (we accepted), send the new peer all messages we already have
+	// so they get the same ledger and message history as the rest of the network.
+	if fromAccept {
+		p.sendCatchUp(conn)
+	}
 	// Unmarshal the received list of peers the connection knew about.
 	var peers []string
 	json.Unmarshal(msg.Payload, &peers)
@@ -149,19 +158,24 @@ func (p *Peer) handleDecode(peerID string, conn net.Conn, reader *bufio.Reader) 
 func (p *Peer) OnMessage(from string, msg *Message) {
 	// Sprintf because output is a channel.
 	p.output <- fmt.Sprintf("Peer %s received %s (MsgID: %s) from Peer %s", p.id, msg.Type, msg.MsgID, from)
-	// Pass message to demo synchronization.
-	p.received <- *msg
 	switch msg.Type {
 	case helpers.PING_MESSAGE_TYPE:
 		p.output <- fmt.Sprintf("Peer %s sending Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
+		p.received <- *msg
 		return // Do not flood ping messages.
 	case helpers.TRANSACTION_MESSAGE_TYPE:
-		// Handle receiving of transaction.
+		// Apply the transaction to our local ledger (and skip if we already saw this MsgID).
 		p.handleTransaction(msg)
+	case helpers.JOIN_MESSAGE_TYPE:
+		// Another peer joined the network; if we don't know them yet, connect so we stay fully connected.
+		p.handleJoin(msg)
 	}
+	// Remember we got this message (for dedup) and forward it to neighbours.
 	p.addReceivedFloodMessage(msg)
 	p.FloodNetwork(msg)
+	// Signal after processing so demo counts only when transaction is applied (for ledger convergence check).
+	p.received <- *msg
 }
 
 // Note this message as beeing received (should be used before calling FloodNetwork on a message).
@@ -213,7 +227,8 @@ func (p *Peer) Connect(addr string, port int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	peers, err := p.prepareConnection(conn)
+	// We are the client (joiner), so fromAccept is false (no catch-up from our side).
+	peers, err := p.prepareConnection(conn, false)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +244,49 @@ func (p *Peer) joinNetwork(addr string, peers []string) {
 			p.Connect(addr, port)
 		}
 	}
+}
+
+// floodJoin announces to the network that we joined, so others can add us to their peer set.
+func (p *Peer) floodJoin() {
+	joinMsg := &Message{
+		Type:    helpers.JOIN_MESSAGE_TYPE,
+		MsgID:   "join-" + p.id,
+		From:    p.id,
+		Payload: []byte(p.id),
+	}
+	// Put in history first so we (and catch-up) have the content.
+	p.addReceivedFloodMessage(joinMsg)
+	p.FloodNetwork(joinMsg)
+}
+
+// sendCatchUp sends to conn all messages we have already seen (so a new peer gets the same ledger).
+func (p *Peer) sendCatchUp(conn net.Conn) {
+	p.floodingLock.Lock()
+	defer p.floodingLock.Unlock()
+	for _, hist := range p.msgHistory {
+		// Only send if we stored the message content (we do for received and for floodJoin).
+		if hist.content != nil {
+			_ = p.writeMessage(conn, hist.content)
+		}
+	}
+}
+
+// handleJoin adds the new peer from a Join message to our peer set and connects if we didn't know them.
+func (p *Peer) handleJoin(msg *Message) {
+	newPeerID := msg.From
+	p.lock.Lock()
+	_, exists := p.conns[newPeerID]
+	p.lock.Unlock()
+	if exists {
+		return
+	}
+	// Connect so we have an open TCP connection (fully connected network).
+	port, err := strconv.Atoi(newPeerID)
+	if err != nil {
+		return
+	}
+	// Use same host as we use elsewhere (e.g. localhost in tests).
+	_, _ = p.Connect("localhost", port)
 }
 
 // Send a message to another peer.
@@ -290,23 +348,33 @@ func (p *Peer) readMessage(reader *bufio.Reader) (*Message, error) {
 	return &msg, nil
 }
 
+// FloodMessage sends a message to all peers (with dedup). Same as FloodNetwork; name from exercise.
+func (p *Peer) FloodMessage(msg *Message) {
+	p.FloodNetwork(msg)
+}
+
 func (p *Peer) FloodTransaction(tx *account.Transaction) {
 	payload, err := json.Marshal(&tx)
 	if err != nil {
 		fmt.Println(err) // For testing. There should not be any way to make errors here in production code.
 	}
-	p.FloodNetwork(&Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload})
+	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload}
+	// We don't receive our own flood, so apply the transaction locally here too.
+	p.addReceivedFloodMessage(msg)
+	p.ledger.Transaction(tx)
+	p.FloodNetwork(msg)
 }
 
 func (p *Peer) handleTransaction(msg *Message) {
 	var tx account.Transaction
 	json.Unmarshal(msg.Payload, &tx)
-	// Do nothing, if transaction has already been handled.
-	_, exists := p.msgHistory[msg.MsgID] // WE NEED MUTEX DURING THIS METHOD!
+	// Check under lock so we don't race with addReceivedFloodMessage (same as in OnMessage order).
+	p.floodingLock.Lock()
+	_, exists := p.msgHistory[msg.MsgID]
+	p.floodingLock.Unlock()
 	if exists {
 		return
 	}
-
-	// If transaction has not been processed, process it.
+	// Apply the transaction to our local ledger.
 	p.ledger.Transaction(&tx)
 }

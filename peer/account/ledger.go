@@ -14,3 +14,14 @@ func MakeLedger() *Ledger {
 	ledger.Accounts = make(map[string]int)
 	return ledger
 }
+
+// CopyAccounts returns a copy of the accounts map so we can compare ledgers without holding the lock.
+func (l *Ledger) CopyAccounts() map[string]int {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	out := make(map[string]int, len(l.Accounts))
+	for k, v := range l.Accounts {
+		out[k] = v
+	}
+	return out
+}

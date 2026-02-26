@@ -17,3 +17,6 @@ const PONG_MESSAGE_TYPE = "Pong"
 
 // Transaction messages to send Transaction objects.
 const TRANSACTION_MESSAGE_TYPE = "Transaction"
+
+// Join is flooded when a peer joins the network so others can add it to their peer set.
+const JOIN_MESSAGE_TYPE = "Join"
