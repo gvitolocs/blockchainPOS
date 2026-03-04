@@ -50,13 +50,3 @@ func Decrypt(c, d, n *big.Int) *big.Int {
 	m.Exp(c, d, n)
 	return m
 }
-
-func StringToBigInt(m string) *big.Int {
-	result := new(big.Int)
-	result.SetBytes([]byte(m))
-	return result
-}
-
-func BigIntToString(b *big.Int) string {
-	return string(b.Bytes())
-}

@@ -112,7 +112,7 @@ func TestHybrid(t *testing.T) {
 		}
 		defer file.Close()
 		keyEnc, err := io.ReadAll(file)
-		key := Decrypt(StringToBigInt(string(keyEnc)), d, n)
+		key := Decrypt(BytesToBigInt(keyEnc), d, n)
 
 		// Read encrypted message.
 		msgDec, err := DecryptFromFile(key.Bytes(), msgFile)
@@ -132,8 +132,6 @@ func TestHybrid(t *testing.T) {
 		key, _ := io.ReadAll(file)
 
 		// Read encrypted message.
-		println(string(key))
-		println(msgFile)
 		msgDec, err := DecryptFromFile(key, msgFile) // Should get err.
 		if string(msgDec) == msg {
 			t.Errorf("Bad guy used SK to read secret message!")
