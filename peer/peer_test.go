@@ -2,8 +2,12 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"net"
+	"peer/account"
 	"peer/helpers"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -55,7 +59,7 @@ func TestPeerConnectAndSendMessages(t *testing.T) {
 	peer2 := NewPeer(port2)
 	peer2.Start()
 
-	if err := peer1.Connect("127.0.0.1", peer2.listenport); err != nil {
+	if _, err := peer1.Connect("127.0.0.1", peer2.listenport); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
@@ -96,6 +100,201 @@ func TestPeerConnectAndSendMessages(t *testing.T) {
 		case <-timeout:
 			t.Fatalf("Timed out waiting for messages, got %d/%d", got, k)
 		}
+	}
+}
+
+func TestConnectAndJoinNetwork(t *testing.T) {
+	// Connect three peers and verify they all connect through flooding.
+	// I.e., only attempt to connect 2->1 and 3->1 and check that they all are connected to three peers.
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	conns1 := slices.Collect(maps.Keys(peer1.conns))
+	slices.Sort(conns1)
+	conns2 := slices.Collect(maps.Keys(peer2.conns))
+	slices.Sort(conns2)
+	conns3 := slices.Collect(maps.Keys(peer2.conns))
+	slices.Sort(conns3)
+	expected := []string{peer1.id, peer2.id, peer3.id}
+	slices.Sort(expected)
+	if !(reflect.DeepEqual(conns1, conns2) && reflect.DeepEqual(conns1, conns3) && reflect.DeepEqual(conns1, expected[:])) {
+		t.Fatalf("Peer sets not equal")
+	}
+}
+
+func TestFloodMessage(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+	fmt.Println(port1, port2, port3)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	peer1.FloodNetwork(&Message{MsgID: "flood-001", From: peer1.id, Type: "Test-flood-message"})
+	timeout := time.After(2 * time.Second)
+	// Wait for each peer to receive the flood message twice (one from each other peer).
+	// NB: peer1 should not receive the message at all!
+	// NB: It is technically possible that peer3 receives from peer1 and peer2 before sending, but the chances are minimal
+	// when no order is implemented. Thus, this might need to be changed in the future.
+	expected := [4]chan Message{peer2.received, peer2.received, peer3.received, peer3.received}
+	for _, ch := range expected {
+		select {
+		case <-ch:
+		case <-timeout:
+			t.Errorf("Timed out waiting for message")
+		}
+	}
+}
+
+func TestTransaction(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+	fmt.Println(port1, port2, port3)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) { // Peer3 connects to peer1, but a flooded connection should establish to peer2 afterwards.
+		t.Fatalf("Expected connection from %s in peer1", peer2.id)
+	}
+
+	peer2.FloodTransaction(&account.Transaction{ID: "t-01", From: "User-01", To: "User-02", Amount: 42})
+
+	// Do some testing...
+}
+
+// TestLedgerConvergence checks that after flooding transactions, all peers end up with the same ledger.
+func TestLedgerConvergence(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+	port3 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+	peer3 := NewPeer(port3)
+	peer3.StartWithConnection("localhost", port1)
+	if !waitForConn(peer2, peer3.id, 2*time.Second) {
+		t.Fatalf("Peers did not connect")
+	}
+
+	// Each peer sends 2 transactions; total 6, all use accounts A,B.
+	peer1.FloodTransaction(&account.Transaction{ID: "lc-1", From: "A", To: "B", Amount: 10})
+	peer2.FloodTransaction(&account.Transaction{ID: "lc-2", From: "B", To: "A", Amount: 3})
+	peer3.FloodTransaction(&account.Transaction{ID: "lc-3", From: "A", To: "B", Amount: 1})
+	peer1.FloodTransaction(&account.Transaction{ID: "lc-4", From: "B", To: "A", Amount: 2})
+	peer2.FloodTransaction(&account.Transaction{ID: "lc-5", From: "A", To: "B", Amount: 5})
+	peer3.FloodTransaction(&account.Transaction{ID: "lc-6", From: "B", To: "A", Amount: 1})
+
+	totalTx := 6
+	done := make(chan struct{})
+	for _, p := range []*Peer{peer1, peer2, peer3} {
+		p := p
+		go func() {
+			count := 0
+			for count < totalTx {
+				msg := <-p.received
+				if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE {
+					count++
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Timeout waiting for transactions")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	ref := peer1.ledger.CopyAccounts()
+	for i, p := range []*Peer{peer2, peer3} {
+		other := p.ledger.CopyAccounts()
+		if !maps.Equal(ref, other) {
+			t.Errorf("Ledger mismatch peer%d: got %v, want same as peer1 %v", i+2, other, ref)
+		}
+	}
+}
+
+// TestTransactionDeliveryCount checks that when one peer floods N transactions, the other peer receives all N (distinct MsgIDs).
+func TestTransactionDeliveryCount(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+	if !waitForConn(peer1, peer2.id, 2*time.Second) {
+		t.Fatalf("Peers did not connect")
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	numTx := 4
+	wantIDs := make(map[string]bool)
+	for i := 0; i < numTx; i++ {
+		wantIDs[fmt.Sprintf("tdc-%d", i)] = true
+	}
+
+	done := make(chan struct{})
+	go func() {
+		seen := make(map[string]bool)
+		for len(seen) < numTx {
+			msg := <-peer1.received
+			if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE && wantIDs[msg.MsgID] {
+				seen[msg.MsgID] = true
+			}
+		}
+		done <- struct{}{}
+	}()
+
+	for i := 0; i < numTx; i++ {
+		peer2.FloodTransaction(&account.Transaction{
+			ID:     fmt.Sprintf("tdc-%d", i),
+			From:   "X",
+			To:     "Y",
+			Amount: 1,
+		})
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout: peer1 did not receive all transactions from peer2")
 	}
 }
 
