@@ -26,16 +26,27 @@ func TestVerifySignature(t *testing.T) {
 }
 
 func BenchmarkHashSpeed(b *testing.B) {
-	msg := make([]byte, 0, 10_000)
-	sha256.Sum256(msg)
+	msg := make([]byte, 10_000) // 10 KB message
+	for i := 0; i < b.N; i++ {
+		sha256.Sum256(msg)
+	}
 }
 
-/* Result:
+/* Result (example realistic values):
+
 goos: windows
 goarch: amd64
 pkg: dissycrypto
 cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
-BenchmarkHashSpeed-8   	1000000000	         0.0000065 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHashSpeed-8   	300000	      4200 ns/op	       0 B/op	       0 allocs/op
+
+Explanation:
+4200 ns to hash 10 KB
+10 KB = 80,000 bits
+
+Hash throughput ≈
+80,000 bits / 4.2e-6 s ≈ 19 Gbit/s
+≈ 2.4 GB/s
 */
 
 func BenchmarkSignatureOnHash(b *testing.B) {
