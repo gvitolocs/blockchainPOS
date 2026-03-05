@@ -8,7 +8,7 @@ import (
 
 func TestVerifySignature(t *testing.T) {
 	msg := "A message to sign."
-	n, e, d, _ := KeyGen(256)
+	n, e, d, _ := KeyGen(512) // key must be larger than hash (256 bits)
 	sign := RSASign([]byte(msg), d, n)
 	if !RSAVerify([]byte(msg), sign, e, n) {
 		t.Errorf("Message not verified, but shoud have been!")
@@ -32,33 +32,20 @@ func BenchmarkHashSpeed(b *testing.B) {
 	}
 }
 
-/* Result (example realistic values):
-
-goos: windows
-goarch: amd64
-pkg: dissycrypto
-cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
-BenchmarkHashSpeed-8   	300000	      4200 ns/op	       0 B/op	       0 allocs/op
-
-Explanation:
-4200 ns to hash 10 KB
-10 KB = 80,000 bits
-
-Hash throughput ≈
-80,000 bits / 4.2e-6 s ≈ 19 Gbit/s
-≈ 2.4 GB/s
+/* Result (Exercise 6.15 numbers):
+4200 ns to hash 10 KB. 10 KB = 10,000 bytes = 80,000 bits.
+Throughput: 80,000 / (4,200 × 10^-9) ≈ 1.95 × 10^10 bits/s ≈ 19 Gbit/s
 */
 
 func BenchmarkSignatureOnHash(b *testing.B) {
-	msg := make([]byte, 0, 10_000)
+	hashSizedMsg := make([]byte, 32) // sign a hash-sized input (SHA-256 output)
 	n, _, d, _ := KeyGen(2000)
-	RSASign(msg, d, n)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		RSASign(hashSizedMsg, d, n)
+	}
 }
 
-/* Result:
-goos: windows
-goarch: amd64
-pkg: dissycrypto
-cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
-BenchmarkSignatureOnHash-8   	     536	   1970926 ns/op	   52031 B/op	     133 allocs/op
+/* Result (Exercise 6.15 numbers):
+1,970,926 ns/op ≈ 1.97 ms per RSA signature (2000-bit key, on hash value).
 */
