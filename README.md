@@ -18,4 +18,4 @@ cd peer
 go test
 ```
 
-See also REPORT.pdf for design, how to run, and discussion questions in English.
+See also the reports: `reports/reportHI1.pdf` (Hand-in 1), `reports/reportHI3.pdf` (Hand-in 3 – validation and measurements).
