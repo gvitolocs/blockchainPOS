@@ -9,7 +9,7 @@ import (
 func TestAES(t *testing.T) {
 	// Create key for AES encryption.
 	key, _, _, _ := KeyGen(32 * 8) // 32 byte key.
-	filename := "./test1.txt"
+	filename := "./testfiles/test1.txt"
 	m := "TOP SECRET: The answer is 42."
 	EncryptToFile(key.Bytes(), []byte(m), filename)
 	m_dec, _ := DecryptFromFile(key.Bytes(), filename)
@@ -81,8 +81,8 @@ func TestAES_RSA(t *testing.T) {
 */
 
 func TestHybrid(t *testing.T) {
-	msgFile := "./test2.txt"
-	keyFile := "./test2.sk"
+	msgFile := "./testfiles/test2.txt"
+	keyFile := "./testfiles/test2.sk"
 	msg := "TOP SECRET: Operation Handin3\nSteps shall be executed exactly as stated in the following text.\nStep 1) Write assignment.\nStep 2) Await approval.\nStep 3) Bask in glory.\nDA1 Command Centre, HQ."
 	// Create RSA key.
 	n, e, d, _ := KeyGen(1024) // Technically generated at receiver, and (n, e) is sent to sender.
