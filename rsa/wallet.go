@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/pbkdf2"
-	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
 	"math/big"
 	"os"
@@ -10,7 +10,7 @@ import (
 
 const WALLET_KEY_SIZE = 2048 / 8 // Key size in bytes.
 const HASH_SIZE = 32
-const PASSWORD_HASH_ITERATION_COUNT = 4096 // The number of iterations to run when hashing password.
+const PASSWORD_HASH_ITERATION_COUNT = 300000 // The number of iterations to run when hashing password.
 
 /*
 Create an  RSA sk/pk pair and store the sk in a file (given by filename)
@@ -58,7 +58,7 @@ func Sign(filename string, password string, msg []byte) ([]byte, error) {
 	return signature.Bytes(), nil
 }
 
-// Wrapper around RSASign to handle public key and signature in string and byte format, respectively.
+// Wrapper around RSAVerify to handle public key and signature in string and byte format, respectively.
 func VerifySignature(msg, signature []byte, pk string) bool {
 	pkBytes := []byte(pk)
 	var n, e, s big.Int
@@ -70,7 +70,7 @@ func VerifySignature(msg, signature []byte, pk string) bool {
 
 func hashPassword(password string) ([]byte, error) {
 	salt := []byte("salt") // We do not use different salts in this exercise.
-	return pbkdf2.Key(sha256.New, password, salt, PASSWORD_HASH_ITERATION_COUNT, HASH_SIZE)
+	return pbkdf2.Key(sha512.New, password, salt, PASSWORD_HASH_ITERATION_COUNT, HASH_SIZE)
 }
 
 func main() {

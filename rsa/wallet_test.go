@@ -56,5 +56,5 @@ func BenchmarkPasswordHashSpeed(b *testing.B) {
 
 /* Benchmark results:
 cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
-BenchmarkPasswordHashSpeed-8   	    1756	    759445 ns/op	     800 B/op	      12 allocs/op
+BenchmarkPasswordHashSpeed-8   	       7	 161750529 ns/op	    1393 B/op	      12 allocs/op
 */
