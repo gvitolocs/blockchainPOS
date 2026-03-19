@@ -1,12 +1,16 @@
 package main
 
 import (
+	"crypto/pbkdf2"
+	"crypto/sha256"
 	"fmt"
 	"math/big"
 	"os"
 )
 
 const WALLET_KEY_SIZE = 2048 / 8 // Key size in bytes.
+const HASH_SIZE = 32
+const PASSWORD_HASH_ITERATION_COUNT = 4096 // The number of iterations to run when hashing password.
 
 /*
 Create an  RSA sk/pk pair and store the sk in a file (given by filename)
@@ -19,9 +23,12 @@ func Generate(filename string, password string) string {
 	sk := append(n.Bytes(), d.Bytes()...)
 	pk := append(n.Bytes(), e.Bytes()...)
 	// Hash the password.
-	passwordHash := hashPassword(password)
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return ""
+	}
 	// Encrypt and save the secret key.
-	EncryptToFile(passwordHash[:], sk, filename)
+	EncryptToFile(passwordHash, sk, filename)
 	return string(pk)
 }
 
@@ -29,25 +36,26 @@ func Generate(filename string, password string) string {
 Sign a message (msg) using the secret key stored in the file given by filename.
 Returns the signature.
 */
-func Sign(filename string, password string, msg []byte) []byte /*Signature type*/ {
+func Sign(filename string, password string, msg []byte) ([]byte, error) {
 	// Check file exists.
 	if _, err := os.Stat(filename); err != nil {
-		return nil
+		return nil, err
 	}
-	// Check password. TODO.
-
 	// Get hold of the secret key stored in the file.
-	passwordHash := hashPassword(password)
-	sk, err := DecryptFromFile(passwordHash[:], filename)
+	passwordHash, err := hashPassword(password)
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	sk, err := DecryptFromFile(passwordHash, filename)
+	if err != nil {
+		return nil, err
 	}
 	var n, d big.Int
 	n.SetBytes(sk[:WALLET_KEY_SIZE])
 	d.SetBytes(sk[WALLET_KEY_SIZE:])
 	// Sign the message and return the signature.
 	signature := RSASign(msg, &d, &n)
-	return signature.Bytes()
+	return signature.Bytes(), nil
 }
 
 // Wrapper around RSASign to handle public key and signature in string and byte format, respectively.
@@ -60,19 +68,23 @@ func VerifySignature(msg, signature []byte, pk string) bool {
 	return RSAVerify(msg, &s, &e, &n)
 }
 
-// Convenience method to make a slow hashing method for password to slow adversary.
-// TODO: Make this slow.
-func hashPassword(password string) [32]byte {
-	return applyHash([]byte(password))
+func hashPassword(password string) ([]byte, error) {
+	salt := []byte("salt") // We do not use different salts in this exercise.
+	return pbkdf2.Key(sha256.New, password, salt, PASSWORD_HASH_ITERATION_COUNT, HASH_SIZE)
 }
 
 func main() {
 	password := "verygoodpassword(TM)"
-	filename := "walletkey.sk"
+	filename := "./testfiles/walletkey.sk"
+	fmt.Printf("Starting Wallet Demo.\nPassword: %s\nStorage location of secret key: %s\n", password, filename)
 	msg := []byte("An authentic message sent by DA1 Command HQ.")
 	pk := Generate(filename, password)
-	sign := Sign(filename, "password", msg)
+	sign, err := Sign(filename, password, msg)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	verify := VerifySignature(msg, sign, pk)
 
-	fmt.Printf("Public key: %s\n\rSignature: %s\n\rVerification: %t", pk, string(sign), verify)
+	fmt.Printf("Verification: %t", verify)
 }

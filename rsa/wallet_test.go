@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestGenerate(t *testing.T) {
 	TEST_WALLET_KEY_FILENAME := "./testfiles/walletkey-test1.sk"
@@ -8,7 +10,7 @@ func TestGenerate(t *testing.T) {
 	pk := Generate(TEST_WALLET_KEY_FILENAME, password)
 	pkBytes := []byte(pk)
 
-	passwordHash := hashPassword(password)
+	passwordHash, _ := hashPassword(password)
 	sk, _ := DecryptFromFile(passwordHash[:], TEST_WALLET_KEY_FILENAME)
 	if !compareSlices(pkBytes[:WALLET_KEY_SIZE], sk[:WALLET_KEY_SIZE]) {
 		t.Errorf("sk and pk do not share n!")
@@ -21,13 +23,16 @@ func TestGenerateAndSign(t *testing.T) {
 	pk := Generate(TEST_WALLET_KEY_FILENAME, CORRECT_PASSWORD)
 
 	msg := []byte("An authentic message.")
-	wrongSignature := Sign(TEST_WALLET_KEY_FILENAME, "wrong password", msg)
-	correctSignature := Sign(TEST_WALLET_KEY_FILENAME, CORRECT_PASSWORD, msg)
+	wrongSignature, _ := Sign(TEST_WALLET_KEY_FILENAME, "wrong password", msg)
+	correctSignature, _ := Sign(TEST_WALLET_KEY_FILENAME, CORRECT_PASSWORD, msg)
 	if VerifySignature(msg, wrongSignature, pk) {
 		t.Errorf("Wrong signature passed test!")
 	}
 	if !VerifySignature(msg, correctSignature, pk) {
 		t.Errorf("Correct signature failed test!")
+	}
+	if VerifySignature([]byte("A fake message"), correctSignature, pk) {
+		t.Error("A fake message passed signature verification.")
 	}
 }
 
@@ -42,3 +47,14 @@ func compareSlices(v1, v2 []byte) bool {
 	}
 	return true
 }
+
+func BenchmarkPasswordHashSpeed(b *testing.B) {
+	for b.Loop() {
+		hashPassword("verygoodpassword(TM)")
+	}
+}
+
+/* Benchmark results:
+cpu: 11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz
+BenchmarkPasswordHashSpeed-8   	    1756	    759445 ns/op	     800 B/op	      12 allocs/op
+*/
