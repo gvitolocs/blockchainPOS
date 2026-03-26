@@ -22,6 +22,9 @@ type Peer struct {
 	conns      map[string]net.Conn
 	// output serializes logging to stdout.
 	output chan string
+	// verbose controls per-message logs.
+	// Kept false so terminal output stays TA-friendly (ledger-focused, not ping-pong spam).
+	verbose bool
 	// received forwards messages to the demo WaitGroup.
 	received chan Message
 	lock     sync.Mutex
@@ -57,6 +60,7 @@ func NewPeer(listenport int) *Peer {
 	peer.output = make(chan string, 32)
 	peer.received = make(chan Message, 32)
 	peer.msgHistory = make(map[string]MessageHistory)
+	peer.verbose = false
 	// Ledger must be initialized or Transaction() would panic on nil map.
 	peer.ledger = *account.MakeLedger()
 	return peer
@@ -156,17 +160,18 @@ func (p *Peer) handleDecode(peerID string, conn net.Conn, reader *bufio.Reader) 
 
 // Handle messages received.
 func (p *Peer) OnMessage(from string, msg *Message) {
-	// Sprintf because output is a channel.
-	p.output <- fmt.Sprintf("Peer %s received %s (MsgID: %s) from Peer %s", p.id, msg.Type, msg.MsgID, from)
 	switch msg.Type {
 	case helpers.PING_MESSAGE_TYPE:
-		p.output <- fmt.Sprintf("Peer %s sending Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
+		p.logf("Peer %s sending Pong (MsgID: %s) to Peer %s", p.id, msg.MsgID, from)
 		p.Send(from, &Message{Type: helpers.PONG_MESSAGE_TYPE, MsgID: msg.MsgID, From: p.id})
 		p.received <- *msg
 		return // Do not flood ping messages.
 	case helpers.TRANSACTION_MESSAGE_TYPE:
-		// Apply the transaction to our local ledger (and skip if we already saw this MsgID).
-		p.handleTransaction(msg)
+		// Critical for convergence: apply each Tx exactly once per peer.
+		// If this returns false, this delivery is a duplicate and must be ignored.
+		if !p.handleTransaction(msg) {
+			return
+		}
 	case helpers.JOIN_MESSAGE_TYPE:
 		// Another peer joined the network; if we don't know them yet, connect so we stay fully connected.
 		p.handleJoin(msg)
@@ -204,7 +209,7 @@ func (p *Peer) FloodNetwork(msg *Message) {
 	// Set the message to be sent.
 	hist.isSent = true
 	p.msgHistory[msg.MsgID] = hist
-	p.output <- fmt.Sprintf("Peer %s flooding %s (MsgID: %s)", p.id, msg.Type, msg.MsgID)
+	p.logf("Peer %s flooding %s (MsgID: %s)", p.id, msg.Type, msg.MsgID)
 	// Change the sender, so that others are aware they received this message version from this peer.
 	msg.From = p.id
 	// Send to all peers it did not receive the message from (and also not itself).
@@ -362,19 +367,37 @@ func (p *Peer) FloodTransaction(tx *account.Transaction) {
 	// We don't receive our own flood, so apply the transaction locally here too.
 	p.addReceivedFloodMessage(msg)
 	p.ledger.Transaction(tx)
+	// We don't receive our own flood back on the network, so push one local event here.
+	// This keeps demo/test counting symmetric across all peers.
+	p.received <- *msg
 	p.FloodNetwork(msg)
 }
 
-func (p *Peer) handleTransaction(msg *Message) {
+func (p *Peer) handleTransaction(msg *Message) bool {
 	var tx account.Transaction
 	json.Unmarshal(msg.Payload, &tx)
-	// Check under lock so we don't race with addReceivedFloodMessage (same as in OnMessage order).
+	// Check-and-mark is atomic under one lock:
+	// without this, two concurrent duplicate deliveries could both pass "not seen yet"
+	// and apply the same transaction twice, causing ledger divergence.
 	p.floodingLock.Lock()
 	_, exists := p.msgHistory[msg.MsgID]
-	p.floodingLock.Unlock()
 	if exists {
-		return
+		p.floodingLock.Unlock()
+		return false
 	}
+	hist := *NewMessageHistory(msg)
+	hist.receivedFrom = append(hist.receivedFrom, msg.From)
+	p.msgHistory[msg.MsgID] = hist
+	p.floodingLock.Unlock()
 	// Apply the transaction to our local ledger.
 	p.ledger.Transaction(&tx)
+	return true
+}
+
+func (p *Peer) logf(format string, a ...any) {
+	if !p.verbose {
+		// Default path in hand-in runs: keep output minimal and readable.
+		return
+	}
+	p.output <- fmt.Sprintf(format, a...)
 }

@@ -27,20 +27,19 @@ func runHandin() {
 	// 1) Start first peer with no existing network (it starts its own).
 	peers[0] = NewPeer(basePort)
 	peers[0].StartWithConnection("localhost", -1)
-	fmt.Printf("Peer %s started (first in network)\n", peers[0].id)
 
 	// 2) Start the rest and point them to the first peer so they join the same network.
 	for i := 1; i < n; i++ {
 		peers[i] = NewPeer(basePort + i)
 		peers[i].StartWithConnection("localhost", basePort)
-		fmt.Printf("Peer %s started and joined network\n", peers[i].id)
 	}
 
 	// Give the network time to form (Join messages and connections).
 	time.Sleep(500 * time.Millisecond)
 
 	totalTx := n * tau
-	// 3) Start goroutines that count transaction deliveries *before* we send, so we don't miss any.
+	// 3) Start counters before sending so no early transaction event is missed.
+	// Each peer expects totalTx events because FloodTransaction now emits one local event too.
 	done := make(chan struct{})
 	for i := 0; i < n; i++ {
 		p := peers[i]
@@ -78,9 +77,10 @@ func runHandin() {
 		}(p, i)
 	}
 	wgSend.Wait()
-	fmt.Printf("All %d peers sent their %d transactions each (%d total)\n", n, tau, totalTx)
+	fmt.Printf("Submitted %d total transactions across %d peers\n", totalTx, n)
 
-	// 5) Wait until every peer has received totalTx transaction messages.
+	// 5) Wait until every peer observed totalTx transaction events.
+	// This is a delivery/completion check before final ledger comparison.
 	for i := 0; i < n; i++ {
 		select {
 		case <-done:
@@ -96,12 +96,14 @@ func runHandin() {
 
 	// 6) Check that all peers have the same ledger (compare first peer with the rest).
 	ref := peers[0].ledger.CopyAccounts()
+	// Print all ledgers once at the end: useful for TA verification, low noise.
+	fmt.Println("Final ledgers:")
+	fmt.Printf("  Peer %s: %v\n", peers[0].id, ref)
 	for i := 1; i < n; i++ {
 		other := peers[i].ledger.CopyAccounts()
+		fmt.Printf("  Peer %s: %v\n", peers[i].id, other)
 		if !maps.Equal(ref, other) {
 			fmt.Printf("Ledger mismatch: peer %s differs from peer %s\n", peers[i].id, peers[0].id)
-			fmt.Printf("  Peer0: %v\n", ref)
-			fmt.Printf("  Peer%d: %v\n", i, other)
 			return
 		}
 	}
