@@ -298,6 +298,18 @@ func TestTransactionDeliveryCount(t *testing.T) {
 	}
 }
 
+func TestMakeSignedTransaction(t *testing.T) {
+	user1, _ := account.NewUser()
+	user2, _ := account.NewUser()
+	tx := account.NewSignedTransaction("test-1", user1, user2.Encode(), 1)
+	if !tx.Verify(user1.Encode()) {
+		t.Errorf("Transaction not verified for true sender.")
+	}
+	if tx.Verify(user2.Encode()) {
+		t.Errorf("Transaction verified for non-sender.")
+	}
+}
+
 func getFreePort(t *testing.T) int {
 	// Ask the OS for an available port.
 	t.Helper()

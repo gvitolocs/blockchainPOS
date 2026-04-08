@@ -21,7 +21,15 @@ func main() {
 func runHandin() {
 	n := 5
 	tau := 5
-	accounts := []string{"A", "B", "C", "D", "E"}
+	const NUM_ACCOUNTS = 6
+	accounts := [NUM_ACCOUNTS]*account.Account{}
+	for i := range NUM_ACCOUNTS {
+		acc, err := account.NewUser()
+		if err != nil {
+			return
+		}
+		accounts[i] = acc
+	}
 	basePort := 43000
 	peers := make([]*Peer, n)
 
@@ -67,12 +75,11 @@ func runHandin() {
 				// Simple tx: rotate between accounts so we use the same 5.
 				from := accounts[(peerIdx+j)%len(accounts)]
 				to := accounts[(peerIdx+j+1)%len(accounts)]
-				tx := &account.Transaction{
-					ID:     fmt.Sprintf("tx-%s-%d-%d", peer.id, peerIdx, j),
-					From:   from,
-					To:     to,
-					Amount: rand.Intn(10),
-				}
+				tx := account.NewSignedTransaction(
+					fmt.Sprintf("tx-%s-%d-%d", peer.id, peerIdx, j),
+					from,
+					to.Encode(),
+					rand.Intn(10))
 				peer.FloodTransaction(tx)
 			}
 		}(p, i)

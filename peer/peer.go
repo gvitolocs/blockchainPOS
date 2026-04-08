@@ -358,15 +358,15 @@ func (p *Peer) FloodMessage(msg *Message) {
 	p.FloodNetwork(msg)
 }
 
-func (p *Peer) FloodTransaction(tx *account.Transaction) {
+func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	payload, err := json.Marshal(&tx)
 	if err != nil {
 		fmt.Println(err) // For testing. There should not be any way to make errors here in production code.
 	}
-	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload}
+	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.Transact.ID, From: p.id, Payload: payload}
 	// We don't receive our own flood, so apply the transaction locally here too.
 	p.addReceivedFloodMessage(msg)
-	p.ledger.Transaction(tx)
+	p.ledger.Transaction(tx.Transact)
 	// We don't receive our own flood back on the network, so push one local event here.
 	// This keeps demo/test counting symmetric across all peers.
 	p.received <- *msg
@@ -374,12 +374,13 @@ func (p *Peer) FloodTransaction(tx *account.Transaction) {
 }
 
 func (p *Peer) handleTransaction(msg *Message) bool {
-	var tx account.Transaction
+	var tx account.SignedTransaction
 	json.Unmarshal(msg.Payload, &tx)
 	// Check-and-mark is atomic under one lock:
 	// without this, two concurrent duplicate deliveries could both pass "not seen yet"
 	// and apply the same transaction twice, causing ledger divergence.
 	p.floodingLock.Lock()
+	defer p.floodingLock.Unlock()
 	_, exists := p.msgHistory[msg.MsgID]
 	if exists {
 		p.floodingLock.Unlock()
@@ -388,9 +389,8 @@ func (p *Peer) handleTransaction(msg *Message) bool {
 	hist := *NewMessageHistory(msg)
 	hist.receivedFrom = append(hist.receivedFrom, msg.From)
 	p.msgHistory[msg.MsgID] = hist
-	p.floodingLock.Unlock()
 	// Apply the transaction to our local ledger.
-	p.ledger.Transaction(&tx)
+	p.ledger.Transaction(tx.Transact)
 	return true
 }
 
