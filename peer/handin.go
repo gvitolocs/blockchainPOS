@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"maps"
+	"math/rand"
 	"peer/account"
 	"peer/helpers"
 	"sync"
@@ -70,7 +71,7 @@ func runHandin() {
 					ID:     fmt.Sprintf("tx-%s-%d-%d", peer.id, peerIdx, j),
 					From:   from,
 					To:     to,
-					Amount: 1,
+					Amount: rand.Intn(10),
 				}
 				peer.FloodTransaction(tx)
 			}
