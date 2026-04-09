@@ -66,7 +66,7 @@ func decode(content string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(content)
 }
 
-func (s *SignedTransaction) Verify(pk string) bool {
+func (s *SignedTransaction) Verify(accountName string) bool {
 	data, err := s.marshalContentForSignature()
 	if err != nil {
 		return false
@@ -75,9 +75,9 @@ func (s *SignedTransaction) Verify(pk string) bool {
 	if err != nil {
 		return false
 	}
-	pkConvert, err := PublicKeyFromAccountName(pk)
+	pk, err := PublicKeyFromAccountName(accountName)
 	if err != nil {
 		return false
 	}
-	return dissycrypto.VerifySignature(data, signature, string(pkConvert))
+	return dissycrypto.VerifySignature(data, signature, string(pk))
 }
