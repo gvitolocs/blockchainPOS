@@ -370,15 +370,10 @@ func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	if p.ledger.HasRecordedTransaction(tx) { // Only use non-recorded messages. Prevent replay attacks.
 		return
 	}
-	//println("HELLO")
-	//if !p.ledger.Transaction(tx) {
-	//	return
-	//}
-	println("FLOOD", p.id, tx.Verify(tx.From))
-	println("FROM", len(tx.From))
-	println("SIG", len(tx.Signature))
 	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload}
-	p.handleTransaction(msg)
+	if !p.handleTransaction(msg) {
+		return
+	}
 	//p.addReceivedFloodMessage(msg)
 	// We don't receive our own flood back on the network, so push one local event here.
 	// This keeps demo/test counting symmetric across all peers.
@@ -402,14 +397,10 @@ func (p *Peer) handleTransaction(msg *Message) bool {
 	if p.ledger.HasRecordedTransaction(&tx) { // Prevent replay attacks.
 		return false
 	}
-	println("HANDLE", p.id, tx.Verify(tx.From))
-	println("FROM", len(tx.From))
-	println("SIG", len(tx.Signature))
 	// Apply the transaction to our local ledger.
 	if !p.ledger.Transaction(&tx) {
 		return false
 	}
-	println("HANDLED")
 	hist := *NewMessageHistory(msg)
 	hist.receivedFrom = append(hist.receivedFrom, msg.From)
 	p.msgHistory[msg.MsgID] = hist
