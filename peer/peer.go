@@ -374,7 +374,6 @@ func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	if !p.handleTransaction(msg) {
 		return
 	}
-	//p.addReceivedFloodMessage(msg)
 	// We don't receive our own flood back on the network, so push one local event here.
 	// This keeps demo/test counting symmetric across all peers.
 	p.received <- *msg
