@@ -7,11 +7,14 @@ import (
 type Ledger struct {
 	Accounts map[string]int
 	lock     sync.Mutex
+	// Array of transactions perfomed on this ledger.
+	txHistory map[string]SignedTransaction
 }
 
 func MakeLedger() *Ledger {
 	ledger := new(Ledger)
 	ledger.Accounts = make(map[string]int)
+	ledger.txHistory = make(map[string]SignedTransaction)
 	return ledger
 }
 

@@ -31,7 +31,8 @@ type Peer struct {
 	// sendLock prevents interleaved writes on a connection.
 	sendLock sync.Mutex
 	// Map of messages this has sent on (key is message ID).
-	msgHistory   map[string]MessageHistory
+	msgHistory map[string]MessageHistory
+	// Lock for flooding mechanisms while handling reception of a message from the network.
 	floodingLock sync.Mutex
 	// Ledger and transaction.
 	ledger account.Ledger
@@ -66,6 +67,7 @@ func NewPeer(listenport int) *Peer {
 	return peer
 }
 
+// Start a peer and try to connect to port.
 func (p *Peer) StartWithConnection(addr string, port int) {
 	p.Start()
 	peers, err := p.Connect(addr, port)
@@ -358,21 +360,33 @@ func (p *Peer) FloodMessage(msg *Message) {
 	p.FloodNetwork(msg)
 }
 
+// Send a transaction across the network.
 func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	payload, err := json.Marshal(&tx)
 	if err != nil {
 		fmt.Println(err) // For testing. There should not be any way to make errors here in production code.
 	}
-	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.Transact.ID, From: p.id, Payload: payload}
 	// We don't receive our own flood, so apply the transaction locally here too.
-	p.addReceivedFloodMessage(msg)
-	p.ledger.Transaction(tx.Transact)
+	if p.ledger.HasRecordedTransaction(tx) { // Only use non-recorded messages. Prevent replay attacks.
+		return
+	}
+	//println("HELLO")
+	//if !p.ledger.Transaction(tx) {
+	//	return
+	//}
+	println("FLOOD", p.id, tx.Verify(tx.From))
+	println("FROM", len(tx.From))
+	println("SIG", len(tx.Signature))
+	msg := &Message{Type: helpers.TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload}
+	p.handleTransaction(msg)
+	//p.addReceivedFloodMessage(msg)
 	// We don't receive our own flood back on the network, so push one local event here.
 	// This keeps demo/test counting symmetric across all peers.
 	p.received <- *msg
 	p.FloodNetwork(msg)
 }
 
+// Handle receiving a transaction from another peer on the network.
 func (p *Peer) handleTransaction(msg *Message) bool {
 	var tx account.SignedTransaction
 	json.Unmarshal(msg.Payload, &tx)
@@ -383,14 +397,23 @@ func (p *Peer) handleTransaction(msg *Message) bool {
 	defer p.floodingLock.Unlock()
 	_, exists := p.msgHistory[msg.MsgID]
 	if exists {
-		p.floodingLock.Unlock()
 		return false
 	}
+	if p.ledger.HasRecordedTransaction(&tx) { // Prevent replay attacks.
+		return false
+	}
+	println("HANDLE", p.id, tx.Verify(tx.From))
+	println("FROM", len(tx.From))
+	println("SIG", len(tx.Signature))
+	// Apply the transaction to our local ledger.
+	if !p.ledger.Transaction(&tx) {
+		return false
+	}
+	println("HANDLED")
 	hist := *NewMessageHistory(msg)
 	hist.receivedFrom = append(hist.receivedFrom, msg.From)
 	p.msgHistory[msg.MsgID] = hist
-	// Apply the transaction to our local ledger.
-	p.ledger.Transaction(tx.Transact)
+
 	return true
 }
 

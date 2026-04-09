@@ -78,7 +78,7 @@ func runHandin() {
 				tx := account.NewSignedTransaction(
 					fmt.Sprintf("tx-%s-%d-%d", peer.id, peerIdx, j),
 					from,
-					to.Encode(),
+					to.SafeEncode(),
 					rand.Intn(10))
 				peer.FloodTransaction(tx)
 			}

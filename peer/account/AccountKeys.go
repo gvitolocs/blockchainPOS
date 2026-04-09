@@ -23,6 +23,10 @@ func NewUser() (*Account, error) {
 	return a, nil
 }
 
-func (a *Account) Encode() string {
-	return string(append(a.n.Bytes(), a.e.Bytes()...)) //base64.StdEncoding.EncodeToString(append(a.n.Bytes(), a.e.Bytes()...))
+func (a *Account) SafeEncode() string {
+	return encode(append(a.n.Bytes(), a.e.Bytes()...))
+}
+
+func PublicKeyFromAccountName(accountName string) ([]byte, error) {
+	return decode(accountName)
 }

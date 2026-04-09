@@ -1,55 +1,83 @@
 package account
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math/big"
 	"peer/dissycrypto"
+	"strconv"
 )
 
-type Transaction struct {
-	ID     string
-	From   string
-	To     string
-	Amount int
-}
-
 type SignedTransaction struct {
-	Transact  *Transaction
-	Signature []byte
+	ID        string
+	From      string
+	To        string
+	Amount    int
+	Signature string
 }
 
-func (l *Ledger) Transaction(t *Transaction) {
+// Perform transactions. Checks whether transaction is authentic before applying.
+func (l *Ledger) Transaction(t *SignedTransaction) bool {
 	l.lock.Lock()
 	defer l.lock.Unlock()
+	if !t.Verify(t.From) {
+		return false
+	}
+
+	l.txHistory[t.ID] = *t
 
 	l.Accounts[t.From] -= t.Amount
 	l.Accounts[t.To] += t.Amount
+	return true
+}
+
+func (l *Ledger) HasRecordedTransaction(tx *SignedTransaction) bool {
+	_, exists := l.txHistory[tx.ID]
+	return exists
 }
 
 func NewSignedTransaction(ID string, From *Account, To string, Amount int) *SignedTransaction {
 	s := new(SignedTransaction)
-	tx := new(Transaction)
-	tx.ID = ID
-	tx.From = From.Encode()
-	tx.To = To
-	tx.Amount = Amount
-	s.Transact = tx
+	s.ID = ID
+	s.From = From.SafeEncode()
+	s.To = To
+	s.Amount = Amount
 	s.signTransaction(From.d, From.n)
 	return s
 }
 
+func (s *SignedTransaction) marshalContentForSignature() ([]byte, error) {
+	return json.Marshal([]string{s.ID, s.From, s.To, strconv.Itoa(s.Amount)})
+}
+
 func (s *SignedTransaction) signTransaction(d, n *big.Int) {
-	data, err := json.Marshal(s.Transact)
+	data, err := s.marshalContentForSignature()
 	if err != nil {
 		return
 	}
-	s.Signature = dissycrypto.RSASign(data, d, n).Bytes()
+	s.Signature = encode(dissycrypto.RSASign(data, d, n).Bytes())
+}
+
+func encode(content []byte) string {
+	return base64.StdEncoding.EncodeToString(content)
+}
+
+func decode(content string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(content)
 }
 
 func (s *SignedTransaction) Verify(pk string) bool {
-	data, err := json.Marshal(s.Transact)
+	data, err := s.marshalContentForSignature()
 	if err != nil {
 		return false
 	}
-	return dissycrypto.VerifySignature(data, s.Signature, pk)
+	signature, err := decode(s.Signature)
+	if err != nil {
+		return false
+	}
+	pkConvert, err := PublicKeyFromAccountName(pk)
+	if err != nil {
+		return false
+	}
+	return dissycrypto.VerifySignature(data, signature, string(pkConvert))
 }
