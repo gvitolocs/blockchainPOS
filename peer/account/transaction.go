@@ -24,7 +24,7 @@ func (l *Ledger) Transaction(t *SignedTransaction) bool {
 		return false
 	}
 
-	l.txHistory[t.ID] = *t
+	l.TxHistory[t.ID] = *t
 
 	l.Accounts[t.From] -= t.Amount
 	l.Accounts[t.To] += t.Amount
@@ -32,7 +32,7 @@ func (l *Ledger) Transaction(t *SignedTransaction) bool {
 }
 
 func (l *Ledger) HasRecordedTransaction(tx *SignedTransaction) bool {
-	_, exists := l.txHistory[tx.ID]
+	_, exists := l.TxHistory[tx.ID]
 	return exists
 }
 

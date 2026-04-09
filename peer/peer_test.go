@@ -212,8 +212,8 @@ func TestLedgerConvergence(t *testing.T) {
 		t.Fatalf("Peers did not connect")
 	}
 
-	user1, _ := account.NewUser()
-	user2, _ := account.NewUser()
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
 	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
 	peer1.FloodTransaction(account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10))
 	peer2.FloodTransaction(account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 3))
@@ -286,8 +286,8 @@ func TestTransactionDeliveryCount(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	sendUser, _ := account.NewUser()
-	receiverUser, _ := account.NewUser()
+	sendUser, _ := account.NewAccount()
+	receiverUser, _ := account.NewAccount()
 	for i := 0; i < numTx; i++ {
 		peer2.FloodTransaction(account.NewSignedTransaction(
 			fmt.Sprintf("tdc-%d", i),
@@ -306,8 +306,8 @@ func TestTransactionDeliveryCount(t *testing.T) {
 }
 
 func TestMakeSignedTransaction(t *testing.T) {
-	user1, _ := account.NewUser()
-	user2, _ := account.NewUser()
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
 	tx := account.NewSignedTransaction("test-1", user1, user2.SafeEncode(), 1)
 	if !tx.Verify(user1.SafeEncode()) {
 		t.Errorf("Transaction not verified for true sender.")
@@ -329,8 +329,8 @@ func TestFakeTransactionsRejected(t *testing.T) {
 		t.Fatalf("Peers did not connect")
 	}
 
-	user1, _ := account.NewUser()
-	user2, _ := account.NewUser()
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
 	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
 	tx1 := account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10)
 	tx2 := account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 10)

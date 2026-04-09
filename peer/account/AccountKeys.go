@@ -11,7 +11,7 @@ type Account struct {
 	d *big.Int
 }
 
-func NewUser() (*Account, error) {
+func NewAccount() (*Account, error) {
 	n, e, d, err := dissycrypto.KeyGen(dissycrypto.WALLET_KEY_SIZE * 8)
 	if err != nil {
 		return nil, err

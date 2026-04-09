@@ -4,9 +4,9 @@ package main
 import (
 	"fmt"
 	"maps"
-	"math/rand"
 	"peer/account"
 	"peer/helpers"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,26 +19,50 @@ func main() {
 
 // runHandin starts peers, floods transactions, and checks ledger convergence.
 func runHandin() {
-	n := 5
-	tau := 5
-	const NUM_ACCOUNTS = 6
-	accounts := [NUM_ACCOUNTS]*account.Account{}
-	for i := range NUM_ACCOUNTS {
-		acc, err := account.NewUser()
-		if err != nil {
-			return
-		}
-		accounts[i] = acc
+	fmt.Println("Starting demo.")
+	const NUM_PEERS = 5
+
+	// Make accounts.
+	acc1, _ := account.NewAccount()
+	acc2, _ := account.NewAccount()
+	acc3, _ := account.NewAccount()
+
+	EASY_ACCOUNT_NAMES := map[string]string{
+		acc1.SafeEncode(): "A",
+		acc2.SafeEncode(): "B",
+		acc3.SafeEncode(): "C",
 	}
+
+	// Make transactions to send.
+	validTransactions := []*account.SignedTransaction{
+		account.NewSignedTransaction("val-01", acc1, acc2.SafeEncode(), 3),
+		account.NewSignedTransaction("val-02", acc3, acc2.SafeEncode(), 5),
+		account.NewSignedTransaction("val-03", acc1, acc2.SafeEncode(), 7),
+		account.NewSignedTransaction("val-04", acc2, acc1.SafeEncode(), 11),
+		account.NewSignedTransaction("val-05", acc3, acc1.SafeEncode(), 13),
+		account.NewSignedTransaction("val-06", acc1, acc3.SafeEncode(), 17),
+	}
+
+	inv2 := account.NewSignedTransaction("inv-02", acc3, acc2.SafeEncode(), 5)
+	inv2.Signature = validTransactions[2].Signature
+	inv3 := account.NewSignedTransaction("inv-03", acc1, acc2.SafeEncode(), 7)
+	inv3.From = acc3.SafeEncode()
+	invalidTransactions := []*account.SignedTransaction{
+		validTransactions[0], // Replay.
+		inv2,                 // Fake signature.
+		inv3,                 // Changing sender.
+	}
+
+	// Connect peers.
 	basePort := 43000
-	peers := make([]*Peer, n)
+	peers := make([]*Peer, NUM_PEERS)
 
 	// 1) Start first peer with no existing network (it starts its own).
 	peers[0] = NewPeer(basePort)
 	peers[0].StartWithConnection("localhost", -1)
 
 	// 2) Start the rest and point them to the first peer so they join the same network.
-	for i := 1; i < n; i++ {
+	for i := 1; i < NUM_PEERS; i++ {
 		peers[i] = NewPeer(basePort + i)
 		peers[i].StartWithConnection("localhost", basePort)
 	}
@@ -46,12 +70,11 @@ func runHandin() {
 	// Give the network time to form (Join messages and connections).
 	time.Sleep(500 * time.Millisecond)
 
-	totalTx := n * tau
+	totalTx := len(validTransactions)
 	// 3) Start counters before sending so no early transaction event is missed.
-	// Each peer expects totalTx events because FloodTransaction now emits one local event too.
+	// Each peer expects len(validTransactions) events because FloodTransaction now emits one local event too.
 	done := make(chan struct{})
-	for i := 0; i < n; i++ {
-		p := peers[i]
+	for i := 0; i < NUM_PEERS; i++ {
 		go func(peer *Peer) {
 			count := 0
 			for count < totalTx {
@@ -61,35 +84,21 @@ func runHandin() {
 				}
 			}
 			done <- struct{}{}
-		}(p)
+		}(peers[i])
 	}
 
-	// 4) Each peer sends τ transactions; all use the same 5 accounts.
+	// 4) Transactions are sent by different peers.
 	var wgSend sync.WaitGroup
-	for i := 0; i < n; i++ {
-		p := peers[i]
-		wgSend.Add(1)
-		go func(peer *Peer, peerIdx int) {
-			defer wgSend.Done()
-			for j := 0; j < tau; j++ {
-				// Simple tx: rotate between accounts so we use the same 5.
-				from := accounts[(peerIdx+j)%len(accounts)]
-				to := accounts[(peerIdx+j+1)%len(accounts)]
-				tx := account.NewSignedTransaction(
-					fmt.Sprintf("tx-%s-%d-%d", peer.id, peerIdx, j),
-					from,
-					to.SafeEncode(),
-					rand.Intn(10))
-				peer.FloodTransaction(tx)
-			}
-		}(p, i)
+	for i, tx := range append(invalidTransactions, validTransactions...) {
+		//fmt.Printf("Flooding transaction %s from Peer %s\n", tx.ID, peers[i%NUM_PEERS].id)
+		flood(peers[i%NUM_PEERS], tx, &wgSend)
 	}
 	wgSend.Wait()
-	fmt.Printf("Submitted %d total transactions across %d peers\n", totalTx, n)
+	fmt.Printf("Submitted %d valid, %d invalid transactions across %d peers\n", len(validTransactions), len(invalidTransactions), NUM_PEERS)
 
 	// 5) Wait until every peer observed totalTx transaction events.
 	// This is a delivery/completion check before final ledger comparison.
-	for i := 0; i < n; i++ {
+	for i := 0; i < NUM_PEERS; i++ {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
@@ -102,18 +111,38 @@ func runHandin() {
 	// Give handlers time to apply all transactions before we compare ledgers.
 	time.Sleep(1 * time.Second)
 
-	// 6) Check that all peers have the same ledger (compare first peer with the rest).
-	ref := peers[0].ledger.CopyAccounts()
+	// 6) Check that demo works and show relevant output.
+
+	// Check that all peers have the same ledger (compare first peer with the rest).
+	ref := peers[0].ledger.CopyAccountsPretty(EASY_ACCOUNT_NAMES)
 	// Print all ledgers once at the end: useful for TA verification, low noise.
 	fmt.Println("Final ledgers:")
 	fmt.Printf("  Peer %s: %v\n", peers[0].id, ref)
-	for i := 1; i < n; i++ {
-		other := peers[i].ledger.CopyAccounts()
+	for i := 1; i < NUM_PEERS; i++ {
+		other := peers[i].ledger.CopyAccountsPretty(EASY_ACCOUNT_NAMES)
 		fmt.Printf("  Peer %s: %v\n", peers[i].id, other)
 		if !maps.Equal(ref, other) {
 			fmt.Printf("Ledger mismatch: peer %s differs from peer %s\n", peers[i].id, peers[0].id)
 			return
 		}
 	}
-	fmt.Println("All ledgers identical. Demo complete.")
+
+	// Check that only valid transactions were applied.
+	for _, p := range peers {
+		if len(p.ledger.TxHistory) != len(validTransactions) {
+			fmt.Printf("Peer %s has an incorrect amount of transactions (%d)\n", p.id, len(p.ledger.TxHistory))
+		}
+		for name := range p.ledger.TxHistory {
+			if strings.Contains(name, "inv") {
+				fmt.Println("An invalid transaction was recorded.")
+			}
+		}
+	}
+	fmt.Printf("All ledgers have %d transactions and no invalid transactions recorded!\n", len(validTransactions))
+
+	fmt.Println("Demo complete.")
+}
+
+func flood(sender *Peer, tx *account.SignedTransaction, wg *sync.WaitGroup) {
+	wg.Go(func() { sender.FloodTransaction(tx) })
 }
