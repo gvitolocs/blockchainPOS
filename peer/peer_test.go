@@ -139,7 +139,7 @@ func TestFloodMessage(t *testing.T) {
 	port1 := getFreePort(t)
 	port2 := getFreePort(t)
 	port3 := getFreePort(t)
-	fmt.Println(port1, port2, port3)
+	//fmt.Println(port1, port2, port3)
 
 	peer1 := NewPeer(port1)
 	peer1.StartWithConnection("localhost", -1)
@@ -173,7 +173,7 @@ func TestTransaction(t *testing.T) {
 	port1 := getFreePort(t)
 	port2 := getFreePort(t)
 	port3 := getFreePort(t)
-	fmt.Println(port1, port2, port3)
+	//fmt.Println(port1, port2, port3)
 
 	peer1 := NewPeer(port1)
 	peer1.StartWithConnection("localhost", -1)
@@ -187,9 +187,13 @@ func TestTransaction(t *testing.T) {
 		t.Fatalf("Expected connection from %s in peer1", peer2.id)
 	}
 
-	peer2.FloodTransaction(&account.Transaction{ID: "t-01", From: "User-01", To: "User-02", Amount: 42})
+	//peer2.FloodTransaction(&account.Transaction{ID: "t-01", From: "User-01", To: "User-02", Amount: 42})
 
 	// Do some testing...
+}
+
+type Msg struct {
+	Content string
 }
 
 // TestLedgerConvergence checks that after flooding transactions, all peers end up with the same ledger.
@@ -208,18 +212,19 @@ func TestLedgerConvergence(t *testing.T) {
 		t.Fatalf("Peers did not connect")
 	}
 
-	// Each peer sends 2 transactions; total 6, all use accounts A,B.
-	peer1.FloodTransaction(&account.Transaction{ID: "lc-1", From: "A", To: "B", Amount: 10})
-	peer2.FloodTransaction(&account.Transaction{ID: "lc-2", From: "B", To: "A", Amount: 3})
-	peer3.FloodTransaction(&account.Transaction{ID: "lc-3", From: "A", To: "B", Amount: 1})
-	peer1.FloodTransaction(&account.Transaction{ID: "lc-4", From: "B", To: "A", Amount: 2})
-	peer2.FloodTransaction(&account.Transaction{ID: "lc-5", From: "A", To: "B", Amount: 5})
-	peer3.FloodTransaction(&account.Transaction{ID: "lc-6", From: "B", To: "A", Amount: 1})
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
+	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
+	peer1.FloodTransaction(account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10))
+	peer2.FloodTransaction(account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 3))
+	peer3.FloodTransaction(account.NewSignedTransaction("lc-3", user1, user2.SafeEncode(), 1))
+	peer1.FloodTransaction(account.NewSignedTransaction("lc-4", user2, user1.SafeEncode(), 2))
+	peer2.FloodTransaction(account.NewSignedTransaction("lc-5", user1, user2.SafeEncode(), 5))
+	peer3.FloodTransaction(account.NewSignedTransaction("lc-6", user2, user1.SafeEncode(), 1))
 
 	totalTx := 6
 	done := make(chan struct{})
 	for _, p := range []*Peer{peer1, peer2, peer3} {
-		p := p
 		go func() {
 			count := 0
 			for count < totalTx {
@@ -281,13 +286,15 @@ func TestTransactionDeliveryCount(t *testing.T) {
 		done <- struct{}{}
 	}()
 
+	sendUser, _ := account.NewAccount()
+	receiverUser, _ := account.NewAccount()
 	for i := 0; i < numTx; i++ {
-		peer2.FloodTransaction(&account.Transaction{
-			ID:     fmt.Sprintf("tdc-%d", i),
-			From:   "X",
-			To:     "Y",
-			Amount: 1,
-		})
+		peer2.FloodTransaction(account.NewSignedTransaction(
+			fmt.Sprintf("tdc-%d", i),
+			sendUser,
+			receiverUser.SafeEncode(),
+			1,
+		))
 		time.Sleep(25 * time.Millisecond)
 	}
 
@@ -295,6 +302,77 @@ func TestTransactionDeliveryCount(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout: peer1 did not receive all transactions from peer2")
+	}
+}
+
+func TestMakeSignedTransaction(t *testing.T) {
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
+	tx := account.NewSignedTransaction("test-1", user1, user2.SafeEncode(), 1)
+	if !tx.Verify(user1.SafeEncode()) {
+		t.Errorf("Transaction not verified for true sender.")
+	}
+	if tx.Verify(user2.SafeEncode()) {
+		t.Errorf("Transaction verified for non-sender.")
+	}
+}
+
+func TestFakeTransactionsRejected(t *testing.T) {
+	port1 := getFreePort(t)
+	port2 := getFreePort(t)
+
+	peer1 := NewPeer(port1)
+	peer1.StartWithConnection("localhost", -1)
+	peer2 := NewPeer(port2)
+	peer2.StartWithConnection("localhost", port1)
+	if !waitForConn(peer1, peer2.id, 2*time.Second) {
+		t.Fatalf("Peers did not connect")
+	}
+
+	user1, _ := account.NewAccount()
+	user2, _ := account.NewAccount()
+	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
+	tx1 := account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10)
+	tx2 := account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 10)
+	// Faking signature.
+	tx2.Signature = tx1.Signature
+	tx3 := account.NewSignedTransaction("lc-3", user2, user1.SafeEncode(), 1)
+	// Making tx3 into a message sent from user1 to user2, but signed under user2's key.
+	tx3.From = user1.SafeEncode()
+	tx3.To = user2.SafeEncode()
+	peer1.FloodTransaction(tx2) // Should be rejected.
+	peer1.FloodTransaction(tx3) // Should be rejected.
+	peer1.FloodTransaction(tx3) // Replay attack. Should be rejected.
+	peer1.FloodTransaction(tx1) // Should be accepted.
+
+	totalTx := 1
+	done := make(chan struct{})
+	for _, p := range []*Peer{peer2} {
+		go func() {
+			count := 0
+			for count < totalTx {
+				msg := <-p.received
+				if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE {
+					count++
+				}
+			}
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < 1; i++ {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Timeout waiting for transactions")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if peer1.ledger.Accounts[user1.SafeEncode()] != -10 {
+		t.Errorf("Wrong account balance. Fake messages were accepted.")
+	}
+	if peer1.ledger.Accounts[user2.SafeEncode()] != 10 {
+		t.Errorf("Wrong account balance. Fake messages were accepted.")
 	}
 }
 
