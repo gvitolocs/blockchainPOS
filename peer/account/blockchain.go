@@ -10,6 +10,7 @@ import (
 
 const BLOCK_SIZE = 16 // The maximum number of transactions in a block.
 const BLOCK_TYPE = "block"
+const NO_PARENT_HASH = "" // The hahs of the genesis block's parent (i.e., none as it has no parent).
 
 type Block struct {
 	Type            string // Tuple type: The text "block".
@@ -80,7 +81,7 @@ func NewBlockchain() *Blockchain {
 		0,
 		0,
 		encode(meta),
-		"",
+		NO_PARENT_HASH,
 		"",
 	})
 	return b
@@ -90,13 +91,68 @@ func NewBlockchain() *Blockchain {
 func (b *Blockchain) GetCurrentTransactions(rollback int) []string {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	depths, nodes := b.calculateDepths()
+	leaf := getLeafHash(depths)
+	meta := getMetaFromLongestBranch(nodes, leaf)
+	return meta[:-rollback]
+}
 
-	// Get transactions in the current longest branch.
-	var transactions []string
-	for _, block := range b.Blocks {
-		transactions = append(transactions, block.MetaData) // TODO: Wrong but useful start.
+// Get the depths of all nodes starting from the genesis.
+func (b *Blockchain) calculateDepths() (map[string]int, map[string]*Block) {
+	// Maps from encoded block hash to depth/block ptr, respectively.
+	depths := make(map[string]int)
+	nodes := make(map[string]*Block)
+	// Initialize with the genesis node.
+	genesisHash := b.Blocks[0].GetBlockHash()
+	depths[encode(genesisHash[:])] = 0
+	nodes[encode(genesisHash[:])] = &b.Blocks[0]
+	// Go over all blocks and determine their depths, if they are valid.
+	for _, block := range b.Blocks[1:] {
+		// Verify that the block is valid before applying.
+		signature, err := decode(block.Signature)
+		if err != nil {
+			continue
+		}
+		if !dissycrypto.VerifySignature(block.marshalForSignature(), signature, block.VerificationKey) {
+			continue
+		}
+		parentDepth, exists := depths[block.ParentHash]
+		if !exists {
+			continue // Parent is an invalid node (most likely because it failed verification).
+		}
+		hash := block.GetBlockHash()
+		depths[encode(hash[:])] = parentDepth + 1
+		nodes[encode(hash[:])] = &block
 	}
-	return transactions
+	return depths, nodes
+}
+
+// Find which node is the leaf of the longest path.
+func getLeafHash(depths map[string]int) string {
+	maxDepth := -1
+	var leaf string
+	for hash, depth := range depths {
+		if depth > maxDepth {
+			leaf = hash
+		} else if depth == maxDepth && hash < leaf { // Tiebreaker: Use the lexicographically smallest hash.
+			leaf = hash
+		}
+	}
+	return leaf
+}
+
+// Extract the metadata from the blocks along the longest branch.
+func getMetaFromLongestBranch(nodes map[string]*Block, leaf string) []string {
+	var meta []string
+	meta = append(meta, nodes[leaf].MetaData)
+	next := leaf
+	// Start from the leaf and work backwards through the tree until the genesis node is encountered.
+	for next != NO_PARENT_HASH {
+		node := nodes[leaf]
+		meta = append(meta, node.MetaData)
+		next = node.ParentHash
+	}
+	return meta
 }
 
 // Given a list of transactions in Total Order, create a ledger.
