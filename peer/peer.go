@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,13 @@ type Peer struct {
 	floodingLock sync.Mutex
 	// Ledger and transaction.
 	ledger account.Ledger
+	// Blockchain state for Exercise 16.2 (PoS total-order).
+	blockchain *account.Blockchain
+	genesis    *account.GenesisMetaData
+	miner      *account.Account
+	// Mempool of valid txs waiting for inclusion in a block.
+	mempool     map[string]account.SignedTransaction
+	mempoolLock sync.Mutex
 }
 
 type MessageHistory struct {
@@ -64,7 +72,17 @@ func NewPeer(listenport int) *Peer {
 	peer.verbose = false
 	// Ledger must be initialized or Transaction() would panic on nil map.
 	peer.ledger = *account.MakeLedger()
+	peer.mempool = make(map[string]account.SignedTransaction)
 	return peer
+}
+
+// ConfigurePoS initializes blockchain state for Exercise 16.2.
+// All peers must receive the same genesis metadata.
+func (p *Peer) ConfigurePoS(genesis *account.GenesisMetaData, miner *account.Account) {
+	p.genesis = genesis
+	p.miner = miner
+	p.blockchain = account.NewBlockchainWithGenesis(genesis)
+	p.ledger = *account.LedgerFromBlockchain(p.blockchain, 0)
 }
 
 // Start a peer and try to connect to port.
@@ -146,7 +164,14 @@ func (p *Peer) handleDecode(peerID string, conn net.Conn, reader *bufio.Reader) 
 	defer func() {
 		_ = conn.Close()
 		p.lock.Lock()
-		delete(p.conns, peerID)
+		// Only remove this peer entry if it still points to this exact connection.
+		// Multiple reconnects can coexist; deleting unconditionally may drop a newer connection.
+		if peerID != p.id {
+			current, exists := p.conns[peerID]
+			if exists && current == conn {
+				delete(p.conns, peerID)
+			}
+		}
 		p.lock.Unlock()
 	}()
 	for {
@@ -174,6 +199,16 @@ func (p *Peer) OnMessage(from string, msg *Message) {
 		if !p.handleTransaction(msg) {
 			return
 		}
+	case helpers.POS_TRANSACTION_MESSAGE_TYPE:
+		// PoS mode: receive transaction into mempool (do not apply directly).
+		if !p.handlePoSTransaction(msg) {
+			return
+		}
+	case helpers.BLOCK_MESSAGE_TYPE:
+		// PoS mode: validate/add block, then rebuild ledger from best chain.
+		if !p.handleBlock(msg) {
+			return
+		}
 	case helpers.JOIN_MESSAGE_TYPE:
 		// Another peer joined the network; if we don't know them yet, connect so we stay fully connected.
 		p.handleJoin(msg)
@@ -181,8 +216,11 @@ func (p *Peer) OnMessage(from string, msg *Message) {
 	// Remember we got this message (for dedup) and forward it to neighbours.
 	p.addReceivedFloodMessage(msg)
 	p.FloodNetwork(msg)
-	// Signal after processing so demo counts only when transaction is applied (for ledger convergence check).
-	p.received <- *msg
+	// Keep received-channel traffic only for message types used by legacy tests.
+	// Join/connect chatter can otherwise fill the channel and stall decode goroutines in the handin demo.
+	if msg.Type == helpers.TRANSACTION_MESSAGE_TYPE || msg.Type == "Test-flood-message" {
+		p.received <- *msg
+	}
 }
 
 // Note this message as beeing received (should be used before calling FloodNetwork on a message).
@@ -217,7 +255,9 @@ func (p *Peer) FloodNetwork(msg *Message) {
 	// Send to all peers it did not receive the message from (and also not itself).
 	for peer, conn := range p.conns {
 		if peer != p.id && !slices.Contains(hist.receivedFrom, peer) {
-			p.writeMessage(conn, msg)
+			if err := p.writeMessage(conn, msg); err != nil {
+				fmt.Printf("writeMessage failed from=%s to=%s type=%s err=%v\n", p.id, peer, msg.Type, err)
+			}
 		}
 	}
 }
@@ -360,6 +400,88 @@ func (p *Peer) FloodMessage(msg *Message) {
 	p.FloodNetwork(msg)
 }
 
+// FloodPoSTransaction broadcasts a transaction for block inclusion in PoS mode.
+func (p *Peer) FloodPoSTransaction(tx *account.SignedTransaction) {
+	payload, err := json.Marshal(&tx)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	msg := &Message{Type: helpers.POS_TRANSACTION_MESSAGE_TYPE, MsgID: tx.ID, From: p.id, Payload: payload}
+	if !p.handlePoSTransaction(msg) {
+		return
+	}
+	p.FloodNetwork(msg)
+}
+
+// MineOneSlot tries to produce and flood one block for the given slot.
+// Returns the mined block when successful.
+func (p *Peer) MineOneSlot(slot int) *account.Block {
+	if p.blockchain == nil || p.miner == nil || p.genesis == nil {
+		return nil
+	}
+	accountName := p.miner.SafeEncode()
+	tickets := p.genesis.InitialBalances[accountName]
+	if tickets <= 0 {
+		return nil
+	}
+	draw := account.ComputeLotteryDraw(p.genesis.Seed, slot, accountName)
+	if !account.WinsLottery(tickets, p.genesis.Hardness, draw) {
+		return nil
+	}
+
+	parentHash := p.blockchain.BestLeafHash()
+	// Build a block from txs that are valid on top of current best chain state.
+	// This prevents one invalid tx from making the whole candidate block invalid.
+	tempLedger := account.LedgerFromBlockchain(p.blockchain, 0)
+	p.mempoolLock.Lock()
+	selected := make([]account.SignedTransaction, 0, account.BLOCK_SIZE)
+	for _, tx := range p.mempool {
+		if tempLedger.Transaction(&tx) {
+			selected = append(selected, tx)
+		}
+		if len(selected) >= account.BLOCK_SIZE {
+			break
+		}
+	}
+	p.mempoolLock.Unlock()
+
+	block := account.NewCandidateBlock(p.miner, slot, parentHash, selected, p.genesis.Seed)
+	payload, err := json.Marshal(block)
+	if err != nil {
+		return nil
+	}
+	hash := block.GetBlockHash()
+	msgID := base64.StdEncoding.EncodeToString(hash[:])
+	msg := &Message{Type: helpers.BLOCK_MESSAGE_TYPE, MsgID: msgID, From: p.id, Payload: payload}
+
+	if !p.handleBlock(msg) {
+		return nil
+	}
+	p.FloodNetwork(msg)
+	return block
+}
+
+// ApplyBlock force-applies a block locally (used by the handin demo for deterministic convergence).
+func (p *Peer) ApplyBlock(block *account.Block) bool {
+	if p.blockchain == nil {
+		return false
+	}
+	if !p.blockchain.AddBlock(block) {
+		return false
+	}
+	p.ledger = *account.LedgerFromBlockchain(p.blockchain, 0)
+	txs, err := account.DecodeBlockTransactions(block.MetaData)
+	if err == nil {
+		p.mempoolLock.Lock()
+		for _, tx := range txs {
+			delete(p.mempool, tx.ID)
+		}
+		p.mempoolLock.Unlock()
+	}
+	return true
+}
+
 // Send a transaction across the network.
 func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	payload, err := json.Marshal(&tx)
@@ -378,6 +500,79 @@ func (p *Peer) FloodTransaction(tx *account.SignedTransaction) {
 	// This keeps demo/test counting symmetric across all peers.
 	p.received <- *msg
 	p.FloodNetwork(msg)
+}
+
+func (p *Peer) handlePoSTransaction(msg *Message) bool {
+	var tx account.SignedTransaction
+	if err := json.Unmarshal(msg.Payload, &tx); err != nil {
+		return false
+	}
+	// Cheap local checks before inserting to mempool.
+	if tx.Amount < 1 {
+		return false
+	}
+	if !tx.Verify(tx.From) {
+		return false
+	}
+
+	p.floodingLock.Lock()
+	defer p.floodingLock.Unlock()
+	if _, exists := p.msgHistory[msg.MsgID]; exists {
+		return false
+	}
+	// Deduplicate mempool entries too.
+	p.mempoolLock.Lock()
+	_, exists := p.mempool[tx.ID]
+	if !exists {
+		p.mempool[tx.ID] = tx
+	}
+	p.mempoolLock.Unlock()
+
+	hist := *NewMessageHistory(msg)
+	hist.receivedFrom = append(hist.receivedFrom, msg.From)
+	p.msgHistory[msg.MsgID] = hist
+	return !exists
+}
+
+func (p *Peer) handleBlock(msg *Message) bool {
+	if p.blockchain == nil {
+		return false
+	}
+	var block account.Block
+	if err := json.Unmarshal(msg.Payload, &block); err != nil {
+		return false
+	}
+
+	p.floodingLock.Lock()
+	if _, exists := p.msgHistory[msg.MsgID]; exists {
+		p.floodingLock.Unlock()
+		return false
+	}
+	p.floodingLock.Unlock()
+
+	if !p.blockchain.AddBlock(&block) {
+		return false
+	}
+
+	// Rebuild ledger from best chain (simple and deterministic).
+	p.ledger = *account.LedgerFromBlockchain(p.blockchain, 0)
+
+	// Remove included txs from mempool.
+	txs, err := account.DecodeBlockTransactions(block.MetaData)
+	if err == nil {
+		p.mempoolLock.Lock()
+		for _, tx := range txs {
+			delete(p.mempool, tx.ID)
+		}
+		p.mempoolLock.Unlock()
+	}
+
+	p.floodingLock.Lock()
+	hist := *NewMessageHistory(msg)
+	hist.receivedFrom = append(hist.receivedFrom, msg.From)
+	p.msgHistory[msg.MsgID] = hist
+	p.floodingLock.Unlock()
+	return true
 }
 
 // Handle receiving a transaction from another peer on the network.

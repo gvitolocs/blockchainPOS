@@ -214,6 +214,11 @@ func TestLedgerConvergence(t *testing.T) {
 
 	user1, _ := account.NewAccount()
 	user2, _ := account.NewAccount()
+	// Seed balances so valid transactions pass overdraft checks.
+	for _, p := range []*Peer{peer1, peer2, peer3} {
+		p.ledger.Accounts[user1.SafeEncode()] = 100
+		p.ledger.Accounts[user2.SafeEncode()] = 100
+	}
 	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
 	peer1.FloodTransaction(account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10))
 	peer2.FloodTransaction(account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 3))
@@ -288,6 +293,11 @@ func TestTransactionDeliveryCount(t *testing.T) {
 
 	sendUser, _ := account.NewAccount()
 	receiverUser, _ := account.NewAccount()
+	// Seed sender so transactions are valid under overdraft checks.
+	for _, p := range []*Peer{peer1, peer2} {
+		p.ledger.Accounts[sendUser.SafeEncode()] = 100
+		p.ledger.Accounts[receiverUser.SafeEncode()] = 0
+	}
 	for i := 0; i < numTx; i++ {
 		peer2.FloodTransaction(account.NewSignedTransaction(
 			fmt.Sprintf("tdc-%d", i),
@@ -331,6 +341,11 @@ func TestFakeTransactionsRejected(t *testing.T) {
 
 	user1, _ := account.NewAccount()
 	user2, _ := account.NewAccount()
+	// Seed balances so the one valid transaction can be accepted.
+	for _, p := range []*Peer{peer1, peer2} {
+		p.ledger.Accounts[user1.SafeEncode()] = 10
+		p.ledger.Accounts[user2.SafeEncode()] = 0
+	}
 	// Each peer sends 2 transactions; total 6, all use accounts 1 and 2.
 	tx1 := account.NewSignedTransaction("lc-1", user1, user2.SafeEncode(), 10)
 	tx2 := account.NewSignedTransaction("lc-2", user2, user1.SafeEncode(), 10)
@@ -368,10 +383,10 @@ func TestFakeTransactionsRejected(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	if peer1.ledger.Accounts[user1.SafeEncode()] != -10 {
+	if peer1.ledger.Accounts[user1.SafeEncode()] != 0 {
 		t.Errorf("Wrong account balance. Fake messages were accepted.")
 	}
-	if peer1.ledger.Accounts[user2.SafeEncode()] != 10 {
+	if peer1.ledger.Accounts[user2.SafeEncode()] != 9 {
 		t.Errorf("Wrong account balance. Fake messages were accepted.")
 	}
 }

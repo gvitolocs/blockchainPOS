@@ -20,3 +20,9 @@ const TRANSACTION_MESSAGE_TYPE = "Transaction"
 
 // Join is flooded when a peer joins the network so others can add it to their peer set.
 const JOIN_MESSAGE_TYPE = "Join"
+
+// PoS transaction broadcast (queued for block production).
+const POS_TRANSACTION_MESSAGE_TYPE = "PoSTransaction"
+
+// Block broadcast for longest-chain ordering.
+const BLOCK_MESSAGE_TYPE = "Block"

@@ -20,14 +20,23 @@ type SignedTransaction struct {
 func (l *Ledger) Transaction(t *SignedTransaction) bool {
 	l.lock.Lock()
 	defer l.lock.Unlock()
+	// Exercise 16.2: amount must be positive.
+	if t.Amount < 1 {
+		return false
+	}
 	if !t.Verify(t.From) {
+		return false
+	}
+	// Exercise 16.2: reject overdrafts (no negative balances).
+	if l.Accounts[t.From] < t.Amount {
 		return false
 	}
 
 	l.TxHistory[t.ID] = *t
 
 	l.Accounts[t.From] -= t.Amount
-	l.Accounts[t.To] += t.Amount
+	// Exercise 16.2: receiver gets 1 AU less; this difference is the fee.
+	l.Accounts[t.To] += t.Amount - 1
 	return true
 }
 

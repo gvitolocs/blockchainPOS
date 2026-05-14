@@ -1,6 +1,6 @@
-# Hand-in 2 – Exercise 4.6 (Peer-to-Peer Flooding and a Simple Ledger)
+# Hand-in 10 - Exercise 16.2 (Static Proof-of-Stake)
 
-This repository contains the code and report for Hand-in 2 (Exercise 4.6).
+This repository contains the code and report for Hand-in 10 (Exercise 16.2).
 
 ## Run the demo
 
@@ -9,13 +9,14 @@ cd peer
 go run .
 ```
 
-Starts 5 peers, connects them, each sends 5 transactions, checks that all ledgers are identical.
+Runs the Exercise 16.2 demo with 10 peers, slot-based PoS block production, longest-chain ordering,
+throughput output, and rollback observation.
 
 ## Run the tests
 
 ```bash
 cd peer
-go test
+go test ./...
 ```
 
-See also the reports: `reports/reportHI1.pdf` (Hand-in 1), `reports/reportHI3.pdf` (Hand-in 3 – validation and measurements).
+Report PDF: `reports/reportHI10.pdf`.
